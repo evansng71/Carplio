@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 export default function AnalyticsPage() {
   const [overview, setOverview] = useState<Record<string, number> | null>(null);
   const [budgets, setBudgets] = useState<Array<{ id: string; name: string; year: number; source: string }>>([]);
-  const [compare, setCompare] = useState<unknown>(null);
+  const [compare, setCompare] = useState<object | null>(null);
   const [sims, setSims] = useState<Array<{ id: string; name: string; resultJson: string }>>([]);
   const [msg, setMsg] = useState('');
 
