@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f7f5f1;
+  --bg-elevated: #ffffff;
+  --text: #0b1f33;
+  --muted: #5b6b7c;
+  --border: #d9e0e8;
+  --action: #1b6ca8;
+  --night: #0b1f33;
+}
+
+.dark {
+  --bg: #0b1f33;
+  --bg-elevated: #14324f;
+  --text: #f3f6f9;
+  --muted: #a8b7c7;
+  --border: #24415f;
+  --action: #4da3db;
+  --night: #081624;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-manrope), Manrope, system-ui, sans-serif;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition;
+  }
+  .btn-primary {
+    @apply btn bg-action text-white hover:bg-action/90;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-night hover:bg-night/5 dark:text-cream dark:hover:bg-white/5;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white hover:bg-danger/90;
+  }
+  .card {
+    @apply rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-panel;
+  }
+  .input {
+    @apply w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm outline-none focus:border-action focus:ring-2 focus:ring-action/20;
+  }
+  .label {
+    @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--muted)];
+  }
+}
