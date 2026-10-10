@@ -16,3 +16,4 @@ generated-pdfs
 
 # hosting seed marker
 apps/api/prisma/.seeded
+.hosting-build.lock

@@ -186,11 +186,13 @@ Si une seule app Node écoute sur `PORT` avec reverse-proxy interne :
 
 | Champ Infomaniak | Commande |
 |---|---|
-| **Build** | `git pull --ff-only origin main && npm run build:hosting` |
+| **Build** | `npm run build:hosting` |
 | **Start** | `npm run start:hosting` |
 
-Important : un simple **Redémarrer** ne met pas à jour le code. Il faut lancer le **Build** (qui fait `git pull` + compilation).  
-Sans `.next`, le start échoue. Les logs Start qui montrent encore `run Build first` = ancien code non tiré depuis GitHub.
+**Ne jamais** mettre `build:hosting && start:hosting` dans Start : ça relance un build à chaque crash et coupe `next build` en plein milieu (`Collecting page data`).
+
+Procédure : **Arrêter** → lancer **un seul Build** jusqu’au bout → **Start**.  
+Le build fait déjà `git pull` + compilation (verrou anti-parallèle).
 
 ---
 
