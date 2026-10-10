@@ -31,7 +31,8 @@ export function ClientNav() {
   return (
     <nav className="cli-aside-nav" aria-label="Navigation portail client">
       {ITEMS.map((item) => {
-        const active = item.exact
+        const exact = 'exact' in item && item.exact === true;
+        const active = exact
           ? path === item.href
           : path === item.href || path.startsWith(`${item.href}/`);
         const Icon = item.Icon;
