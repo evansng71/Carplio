@@ -7,7 +7,7 @@
     "dev": "pnpm -r --parallel --filter @autocar/api --filter @autocar/web run dev",
     "build": "pnpm -r run build",
     "build:hosting": "node scripts/run-hosting-build.mjs",
-    "start:hosting": "node scripts/ensure-hosting-env.mjs && node scripts/start-hosting.mjs",
+    "start:hosting": "node scripts/pull-hosting.mjs && node scripts/ensure-hosting-env.mjs && node scripts/start-hosting.mjs",
     "test": "pnpm --filter @autocar/api test",
     "db:generate": "pnpm --filter @autocar/api db:generate",
     "db:migrate": "pnpm --filter @autocar/api db:migrate",
