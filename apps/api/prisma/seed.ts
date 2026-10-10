@@ -88,6 +88,11 @@ const GROUP_DEFS: Array<{
     permissionPrefixes: ['fleet', 'dashboard'],
     deny: ['billing:invoice:list', 'billing:invoice:download', 'hr:sensitive:read'],
   },
+  {
+    key: 'client',
+    name: 'Client portail',
+    extra: ['dashboard:widget:list', 'documents:document:list', 'documents:document:download'],
+  },
 ];
 
 async function main() {
@@ -101,7 +106,10 @@ async function main() {
   await prisma.qualityEvent.deleteMany();
   await prisma.leaveRequest.deleteMany();
   await prisma.plannedRest.deleteMany();
+  await prisma.clientPortalMessage.deleteMany();
+  await prisma.clientAccountLink.deleteMany();
   await prisma.clientQuoteRequest.deleteMany();
+  await prisma.messageThreadParticipant.deleteMany();
   await prisma.simulation.deleteMany();
   await prisma.analyticsReport.deleteMany();
   await prisma.budget.deleteMany();
@@ -115,6 +123,14 @@ async function main() {
   await prisma.repairRequest.deleteMany();
   await prisma.maintenanceAlert.deleteMany();
   await prisma.part.deleteMany();
+  await prisma.payslipLine.deleteMany();
+  await prisma.payslip.deleteMany();
+  await prisma.payrollBonus.deleteMany();
+  await prisma.trainingEnrollment.deleteMany();
+  await prisma.trainingSession.deleteMany();
+  await prisma.trainingCourse.deleteMany();
+  await prisma.hrInterview.deleteMany();
+  await prisma.leaveBalance.deleteMany();
   await prisma.payrollExportBatch.deleteMany();
   await prisma.payrollCounter.deleteMany();
   await prisma.prePayrollMonthlyLine.deleteMany();
@@ -185,6 +201,7 @@ async function main() {
       loginSubheadline:
         'Une solution complète pour planifier, exploiter et optimiser votre activité de transport de voyageurs.',
       loginFooterText: 'Gestion d’exploitation transport voyageurs',
+      logoUrl: '/branding/company-logo-horizon.svg',
       loginHeroImageUrl: '/branding/login-hero-default.svg',
     },
   });
@@ -383,8 +400,37 @@ async function main() {
       firstName: 'David',
       lastName: 'Martin',
       email: 'conducteur@horizon-demo.fr',
-      jobTitle: 'Conducteur',
-      contractHours: 35,
+      phone: '06 12 34 56 78',
+      jobTitle: 'Conducteur ligne / occasionnel',
+      contractType: 'CDI',
+      classification: 'Ouvrier conducteur 3',
+      echelon: '3',
+      jobCoefficient: '150M',
+      contractHours: 151.67,
+      weeklyHours: 35,
+      baseHourlyRate: 14.8,
+      baseMonthlySalary: 2245,
+      hiredAt: new Date('2019-03-12'),
+      trialEndAt: new Date('2019-06-12'),
+      birthDate: new Date('1988-05-14'),
+      birthPlace: 'Lyon',
+      nationality: 'Française',
+      familyStatus: 'marie',
+      dependentsCount: 2,
+      addressLine1: '12 rue des Lilas',
+      postalCode: '69100',
+      city: 'Villeurbanne',
+      country: 'France',
+      collectiveAgreement: 'Transports routiers de voyageurs',
+      workTimeType: 'Temps plein',
+      mutuelle: 'Malakoff Humanis',
+      prevoyance: 'Klesia',
+      emergencyContact: 'Claire dba_tango',
+      emergencyPhone: '06 98 76 54 32',
+      iban: 'FR76 3000 6000 0112 3456 7890 189',
+      bic: 'AGRIFRPP',
+      socialSecurityNumber: '1880575123456 78',
+      rhNotes: 'Polyvalent scolaire / GT — référent nouveaux conducteurs',
       sensitiveNotes: 'DONNÉE SENSIBLE DEMO — ne pas exposer aux exploitants',
     },
   });
@@ -394,6 +440,10 @@ async function main() {
       employeeId: empDriver.id,
       depotId: depotLyon.id,
       licenseNumber: 'D-FR-998877',
+      licenseCategories: 'D',
+      fcoExpiresAt: new Date(Date.now() + 40 * 86400000),
+      medicalExpiresAt: new Date(Date.now() + 90 * 86400000),
+      licenseExpiresAt: new Date(Date.now() + 400 * 86400000),
     },
   });
   await prisma.employeeAccountLink.create({
@@ -413,7 +463,72 @@ async function main() {
       firstName: 'Sophie',
       lastName: 'Bernard',
       email: 'sophie.bernard@horizon-demo.fr',
-      jobTitle: 'Conducteur',
+      phone: '06 45 67 89 01',
+      jobTitle: 'Conducteur scolaire',
+      contractType: 'CDI',
+      classification: 'Ouvrier conducteur 2',
+      echelon: '2',
+      jobCoefficient: '145M',
+      contractHours: 151.67,
+      weeklyHours: 35,
+      baseHourlyRate: 13.9,
+      baseMonthlySalary: 2110,
+      hiredAt: new Date('2021-09-01'),
+      birthDate: new Date('1994-11-02'),
+      birthPlace: 'Saint-Étienne',
+      nationality: 'Française',
+      familyStatus: 'celibataire',
+      dependentsCount: 0,
+      addressLine1: '8 avenue Jean Jaurès',
+      postalCode: '69007',
+      city: 'Lyon',
+      country: 'France',
+      collectiveAgreement: 'Transports routiers de voyageurs',
+      workTimeType: 'Temps plein',
+      mutuelle: 'Malakoff Humanis',
+      prevoyance: 'Klesia',
+      emergencyContact: 'Paul Bernard',
+      emergencyPhone: '06 11 22 33 44',
+      rhNotes: 'Spécialiste circuits scolaires — dispo mercredi après-midi limitée',
+    },
+  });
+
+  // Salarié administratif (sans fiche conducteur) — démo accès RH
+  const empOffice = await prisma.employee.create({
+    data: {
+      companyId: company.id,
+      depotId: depotLyon.id,
+      matricule: 'A-2001',
+      firstName: 'Nadia',
+      lastName: 'Moreau',
+      email: 'nadia.moreau@horizon-demo.fr',
+      phone: '04 78 00 00 12',
+      jobTitle: 'Assistante RH / Paie',
+      contractType: 'CDI',
+      classification: 'Employé administratif 4',
+      echelon: '4',
+      jobCoefficient: '210',
+      contractHours: 151.67,
+      weeklyHours: 35,
+      baseHourlyRate: 16.2,
+      baseMonthlySalary: 2450,
+      hiredAt: new Date('2020-01-06'),
+      birthDate: new Date('1990-08-22'),
+      birthPlace: 'Grenoble',
+      nationality: 'Française',
+      familyStatus: 'pacse',
+      dependentsCount: 1,
+      addressLine1: '3 place Bellecour',
+      postalCode: '69002',
+      city: 'Lyon',
+      country: 'France',
+      collectiveAgreement: 'Transports routiers de voyageurs',
+      workTimeType: 'Temps plein',
+      mutuelle: 'Malakoff Humanis',
+      prevoyance: 'Klesia',
+      emergencyContact: 'Karim Moreau',
+      emergencyPhone: '06 55 44 33 22',
+      rhNotes: 'Référente bulletins & absences — pas d’accès exploitation',
     },
   });
   await prisma.driver.create({
@@ -421,6 +536,149 @@ async function main() {
       companyId: company.id,
       employeeId: emp2.id,
       depotId: depotLyon.id,
+      licenseCategories: 'D',
+      fcoExpiresAt: new Date(Date.now() + 200 * 86400000),
+      medicalExpiresAt: new Date(Date.now() + 20 * 86400000),
+    },
+  });
+
+  // Module RH — soldes, formations, entretiens
+  const year = new Date().getFullYear();
+  for (const emp of [empDriver, emp2, empOffice]) {
+    for (const [type, entitled] of [
+      ['conges', 25],
+      ['rtt', 8],
+      ['recuperation', 2],
+    ] as const) {
+      await prisma.leaveBalance.create({
+        data: {
+          companyId: company.id,
+          employeeId: emp.id,
+          year,
+          type,
+          entitled,
+          used: type === 'conges' ? 4 : 0,
+          remaining: entitled - (type === 'conges' ? 4 : 0),
+        },
+      });
+    }
+  }
+
+  const courseFco = await prisma.trainingCourse.create({
+    data: {
+      companyId: company.id,
+      code: 'FCO-35',
+      title: 'Formation Continue Obligatoire (FCO) 35 h',
+      category: 'FCO',
+      durationHours: 35,
+      mandatory: true,
+      validityMonths: 60,
+      description: 'FCO conducteurs de voyageurs — renouvellement quinquennal',
+    },
+  });
+  await prisma.trainingCourse.create({
+    data: {
+      companyId: company.id,
+      code: 'SEC-EVAC',
+      title: 'Évacuation & sécurité voyageurs',
+      category: 'securite',
+      durationHours: 7,
+      mandatory: true,
+      validityMonths: 24,
+    },
+  });
+  const sessionFco = await prisma.trainingSession.create({
+    data: {
+      companyId: company.id,
+      courseId: courseFco.id,
+      startsAt: new Date(Date.now() + 14 * 86400000),
+      endsAt: new Date(Date.now() + 18 * 86400000),
+      location: 'Centre AFTRAL Lyon',
+      provider: 'AFTRAL',
+      capacity: 12,
+      costPerSeat: 890,
+      status: 'open',
+    },
+  });
+  await prisma.trainingEnrollment.create({
+    data: {
+      companyId: company.id,
+      sessionId: sessionFco.id,
+      employeeId: empDriver.id,
+      status: 'inscrit',
+    },
+  });
+
+  await prisma.hrInterview.create({
+    data: {
+      companyId: company.id,
+      employeeId: empDriver.id,
+      interviewerUserId: rh.id,
+      kind: 'annuel',
+      title: 'Entretien annuel 2026 — David Martin',
+      scheduledAt: new Date(Date.now() + 21 * 86400000),
+      status: 'planned',
+      objectives: 'Points planning, FCO, perspectives polyvalence scolaire / GT',
+    },
+  });
+  await prisma.hrInterview.create({
+    data: {
+      companyId: company.id,
+      employeeId: emp2.id,
+      interviewerUserId: rh.id,
+      kind: 'professionnel',
+      title: 'Entretien professionnel — Sophie Bernard',
+      scheduledAt: new Date(Date.now() + 45 * 86400000),
+      status: 'planned',
+      objectives: 'Bilan parcours, formations, évolution',
+    },
+  });
+
+  const ym = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  await prisma.payrollBonus.create({
+    data: {
+      companyId: company.id,
+      employeeId: empDriver.id,
+      code: 'PRIM_ANC',
+      label: 'Prime d’ancienneté',
+      amount: 80,
+      kind: 'recurring',
+      active: true,
+    },
+  });
+  await prisma.payrollBonus.create({
+    data: {
+      companyId: company.id,
+      employeeId: empDriver.id,
+      code: 'PRIM_DIM',
+      label: 'Prime dimanche / jours fériés',
+      amount: 120,
+      kind: 'one_shot',
+      yearMonth: ym,
+      active: true,
+    },
+  });
+  await prisma.payrollBonus.create({
+    data: {
+      companyId: company.id,
+      employeeId: empOffice.id,
+      code: 'PRIM_13',
+      label: 'Prime 13ᵉ mois (acompte)',
+      amount: 200,
+      kind: 'one_shot',
+      yearMonth: ym,
+      active: true,
+    },
+  });
+  await prisma.payrollBonus.create({
+    data: {
+      companyId: company.id,
+      employeeId: emp2.id,
+      code: 'INDEM_PANIER',
+      label: 'Indemnité panier repas',
+      amount: 45,
+      kind: 'recurring',
+      active: true,
     },
   });
 
@@ -1252,21 +1510,225 @@ async function main() {
     },
   });
 
-  // Phase 8 — demande portail client
+  // Phase 8 — portail client (compte + facturation + demandes)
+  const clientUser = await createUser(
+    'client@villeurbanne-demo.fr',
+    'Claire Dupont',
+    'client',
+  );
+  await prisma.clientAccountLink.create({
+    data: {
+      userId: clientUser.id,
+      customerId: customer.id,
+      portalRole: 'owner',
+    },
+  });
+
+  const sentQuote = await prisma.quote.create({
+    data: {
+      companyId: company.id,
+      customerId: customer.id,
+      salespersonId: commercial.id,
+      source: 'portal',
+      number: 'D-2026-PORTAL',
+      title: 'Sortie scolaire Annecy — devis en attente',
+      status: 'sent',
+      publishedToPortal: true,
+      publishedAt: new Date(),
+      origin: 'Villeurbanne',
+      destination: 'Annecy',
+      departureAt: new Date(today.getTime() + 21 * 86400000),
+      returnAt: new Date(today.getTime() + 21 * 86400000 + 10 * 3600000),
+      passengers: 52,
+      amountHt: 980,
+      proposedPriceHt: 980,
+      amountTtc: 1078,
+      vatRate: 10,
+      proposedAt: new Date(),
+      validUntil: new Date(today.getTime() + 14 * 86400000),
+      availabilityNote: 'Disponible — confirmation sous 48h',
+      availabilityConfidence: 'high',
+      lines: {
+        create: [
+          {
+            kind: 'transport',
+            label: 'Prestation autocar aller-retour',
+            unit: 'forfait',
+            quantity: 1,
+            unitPriceHt: 880,
+            amountHt: 880,
+            sortOrder: 1,
+          },
+          {
+            kind: 'toll',
+            label: 'Péages estimés',
+            unit: 'forfait',
+            quantity: 1,
+            unitPriceHt: 100,
+            amountHt: 100,
+            sortOrder: 2,
+          },
+        ],
+      },
+    },
+  });
+
+  const invDue = new Date(today);
+  invDue.setDate(invDue.getDate() + 20);
+  const invoiceOpen = await prisma.invoice.create({
+    data: {
+      companyId: company.id,
+      customerId: customer.id,
+      quoteId: sentQuote.id,
+      number: 'F-2026-0001',
+      kind: 'standard',
+      status: 'sent',
+      amountHt: 2420,
+      vatRate: 10,
+      amountTtc: 2662,
+      balance: 2662,
+      dueAt: invDue,
+      issuedAt: today,
+      customerPoNumber: 'BC-VY-2026-14',
+      serviceFrom: today,
+      serviceTo: new Date(today.getTime() + 4 * 86400000),
+      lines: {
+        create: [
+          {
+            kind: 'transport',
+            label: 'Navettes scolaires semaine',
+            unit: 'jour',
+            quantity: 5,
+            unitPriceHt: 484,
+            amountHt: 2420,
+          },
+        ],
+      },
+    },
+  });
+  const invoicePaid = await prisma.invoice.create({
+    data: {
+      companyId: company.id,
+      customerId: customer.id,
+      number: 'F-2026-0002',
+      kind: 'standard',
+      status: 'paid',
+      amountHt: 880,
+      vatRate: 10,
+      amountTtc: 968,
+      balance: 0,
+      dueAt: new Date(today.getTime() - 10 * 86400000),
+      issuedAt: new Date(today.getTime() - 40 * 86400000),
+      paidAt: new Date(today.getTime() - 15 * 86400000),
+      lines: {
+        create: [
+          {
+            kind: 'transport',
+            label: 'Sortie Tête d’Or',
+            unit: 'forfait',
+            quantity: 1,
+            unitPriceHt: 880,
+            amountHt: 880,
+          },
+        ],
+      },
+    },
+  });
+  const payment = await prisma.payment.create({
+    data: {
+      companyId: company.id,
+      customerId: customer.id,
+      amount: 968,
+      method: 'transfer',
+      paidAt: new Date(today.getTime() - 15 * 86400000),
+      notes: 'Virement reçu — F-2026-0002',
+    },
+  });
+  await prisma.paymentAllocation.create({
+    data: {
+      paymentId: payment.id,
+      invoiceId: invoicePaid.id,
+      amount: 968,
+    },
+  });
+  await prisma.customerCredit.create({
+    data: {
+      companyId: company.id,
+      customerId: customer.id,
+      amount: 50,
+      remaining: 50,
+      notes: 'Avoir commercial DEMO',
+    },
+  });
+
+  await prisma.customerDocument.createMany({
+    data: [
+      {
+        customerId: customer.id,
+        name: 'Bon de commande BC-VY-2026-14',
+        category: 'bon_commande',
+        fileName: 'bc-vy-2026-14.pdf',
+        mimeType: 'application/pdf',
+        notes: 'Document de référence DEMO',
+      },
+      {
+        customerId: customer.id,
+        name: 'Attestation assurance groupe',
+        category: 'assurance',
+        fileName: 'attestation-assurance.pdf',
+        mimeType: 'application/pdf',
+      },
+    ],
+  });
+
+  await prisma.clientPortalMessage.create({
+    data: {
+      companyId: company.id,
+      customerId: customer.id,
+      authorId: commercial.id,
+      authorKind: 'staff',
+      subject: 'Bienvenue sur votre espace client',
+      body: 'Bonjour Claire, votre espace client Autocars Horizon est prêt. Vous y retrouverez devis, voyages et factures.',
+      status: 'answered',
+    },
+  });
+
+  await prisma.clientQuoteRequest.create({
+    data: {
+      companyId: company.id,
+      customerId: customer.id,
+      contactName: 'Claire Dupont',
+      email: 'client@villeurbanne-demo.fr',
+      phone: '04 72 00 00 01',
+      tripType: 'scolaire',
+      origin: 'Villeurbanne',
+      destination: 'Musée des Confluences',
+      departureAt: new Date(today.getTime() + 45 * 86400000),
+      returnAt: new Date(today.getTime() + 45 * 86400000 + 6 * 3600000),
+      passengers: 48,
+      vehicleHint: 'Autocar 55 places PMR',
+      message: 'Demande depuis l’espace client connecté (DEMO)',
+      status: 'new',
+    },
+  });
+
   await prisma.clientQuoteRequest.create({
     data: {
       companyId: company.id,
       contactName: 'Comité des fêtes Demo',
       email: 'comite@example-demo.fr',
       phone: '06 00 00 00 00',
+      tripType: 'evenement',
       origin: 'Lyon Part-Dieu',
       destination: 'Annecy',
       departureAt: new Date(today.getTime() + 30 * 86400000),
       passengers: 48,
-      message: 'Aller-retour journée — demande via portail client (DEMO)',
+      message: 'Aller-retour journée — demande publique (DEMO)',
       status: 'new',
     },
   });
+
+  void invoiceOpen;
 
   console.log('Seed OK');
   console.log({
@@ -1278,6 +1740,7 @@ async function main() {
       rh.email,
       commercial.email,
       driverUser.email,
+      clientUser.email,
     ],
     password: DEMO_PASSWORD,
     portals: {

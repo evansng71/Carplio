@@ -25,7 +25,40 @@ class EmployeeDto {
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsString() depotId?: string;
   @IsOptional() @IsString() jobTitle?: string;
+  @IsOptional() @IsString() contractType?: string;
+  @IsOptional() @IsString() classification?: string;
+  @IsOptional() @IsString() echelon?: string;
+  @IsOptional() contractHours?: number;
+  @IsOptional() baseHourlyRate?: number;
+  @IsOptional() baseMonthlySalary?: number;
+  @IsOptional() weeklyHours?: number;
+  @IsOptional() dependentsCount?: number;
+  @IsOptional() @IsString() city?: string;
+  @IsOptional() @IsString() addressLine1?: string;
+  @IsOptional() @IsString() addressLine2?: string;
+  @IsOptional() @IsString() postalCode?: string;
+  @IsOptional() @IsString() country?: string;
+  @IsOptional() @IsString() nationality?: string;
+  @IsOptional() @IsString() birthPlace?: string;
+  @IsOptional() @IsString() familyStatus?: string;
+  @IsOptional() @IsString() collectiveAgreement?: string;
+  @IsOptional() @IsString() jobCoefficient?: string;
+  @IsOptional() @IsString() workTimeType?: string;
+  @IsOptional() @IsString() mutuelle?: string;
+  @IsOptional() @IsString() prevoyance?: string;
+  @IsOptional() @IsString() iban?: string;
+  @IsOptional() @IsString() bic?: string;
+  @IsOptional() @IsString() socialSecurityNumber?: string;
+  @IsOptional() @IsString() emergencyContact?: string;
+  @IsOptional() @IsString() emergencyPhone?: string;
+  @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() sensitiveNotes?: string;
+  @IsOptional() @IsString() rhNotes?: string;
+  /** ISO date strings */
+  @IsOptional() @IsString() hiredAt?: string;
+  @IsOptional() @IsString() endedAt?: string;
+  @IsOptional() @IsString() birthDate?: string;
+  @IsOptional() @IsString() trialEndAt?: string;
 }
 
 @Controller()
@@ -61,7 +94,12 @@ class HrController {
         accountLink: {
           include: {
             user: {
-              include: {
+              select: {
+                id: true,
+                email: true,
+                status: true,
+                mustChangePassword: true,
+                lastLoginAt: true,
                 memberships: { include: { group: true } },
                 invitations: { orderBy: { createdAt: 'desc' }, take: 3 },
               },
@@ -69,6 +107,36 @@ class HrController {
           },
         },
         leaveRequests: { orderBy: { createdAt: 'desc' }, take: 20 },
+        leaveBalances: { orderBy: [{ year: 'desc' }, { type: 'asc' }] },
+        bonuses: { where: { active: true }, orderBy: { createdAt: 'desc' } },
+        payslips: {
+          orderBy: { yearMonth: 'desc' },
+          take: 24,
+          select: {
+            id: true,
+            yearMonth: true,
+            status: true,
+            workedHours: true,
+            overtimeHours: true,
+            grossAmount: true,
+            netAmount: true,
+            employeeCharges: true,
+            employerCharges: true,
+          },
+        },
+        interviews: {
+          orderBy: { scheduledAt: 'desc' },
+          take: 20,
+        },
+        enrollments: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          include: {
+            session: {
+              include: { course: true },
+            },
+          },
+        },
       },
     });
     if (!emp) return null;
@@ -78,8 +146,21 @@ class HrController {
       action: 'read',
     });
     if (!sensitive.allowed) {
-      const { sensitiveNotes: _, ...rest } = emp;
-      return { ...rest, sensitiveNotes: null, _sensitiveHidden: true };
+      const {
+        sensitiveNotes: _n,
+        socialSecurityNumber: _ssn,
+        iban: _iban,
+        bic: _bic,
+        ...rest
+      } = emp;
+      return {
+        ...rest,
+        sensitiveNotes: null,
+        socialSecurityNumber: null,
+        iban: null,
+        bic: null,
+        _sensitiveHidden: true,
+      };
     }
     return emp;
   }
@@ -99,7 +180,13 @@ class HrController {
     @Param('id') id: string,
     @Body() dto: Partial<EmployeeDto>,
   ) {
-    if (dto.sensitiveNotes !== undefined) {
+    const sensitiveKeys = [
+      'sensitiveNotes',
+      'socialSecurityNumber',
+      'iban',
+      'bic',
+    ] as const;
+    if (sensitiveKeys.some((k) => dto[k] !== undefined)) {
       const sensitive = this.engine.authorize(user, {
         module: 'hr',
         resource: 'sensitive',
@@ -109,11 +196,17 @@ class HrController {
         throw new ForbiddenException('Données RH sensibles interdites');
       }
     }
+    const data: Record<string, unknown> = { ...dto };
+    for (const key of ['hiredAt', 'endedAt', 'birthDate', 'trialEndAt'] as const) {
+      if (dto[key] !== undefined) {
+        data[key] = dto[key] ? new Date(dto[key] as string) : null;
+      }
+    }
     await this.prisma.employee.updateMany({
       where: { id, companyId: user.companyId },
-      data: dto,
+      data: data as Partial<EmployeeDto>,
     });
-    return this.prisma.employee.findUnique({ where: { id } });
+    return this.get(user, id);
   }
 
   @Get('drivers')
@@ -288,19 +381,46 @@ class HrController {
 
   @Post('leaves/:id/decide')
   @RequirePermission('hr', 'leave', 'approve')
-  decide(
+  async decide(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body() body: { status: 'approved' | 'rejected'; decisionNote?: string },
   ) {
-    return this.prisma.leaveRequest.update({
+    const leave = await this.prisma.leaveRequest.findFirst({
+      where: { id, companyId: user.companyId },
+      include: { employee: { include: { driver: true } } },
+    });
+    if (!leave) return null;
+    const updated = await this.prisma.leaveRequest.update({
       where: { id },
       data: {
         status: body.status,
         decisionNote: body.decisionNote,
         decidedAt: new Date(),
       },
+      include: { employee: { include: { driver: true } } },
     });
+    // Sync exploitation : indisponibilité conducteur pour bloquer le planning
+    if (
+      body.status === 'approved' &&
+      updated.employee.driver &&
+      updated.startsOn &&
+      updated.endsOn
+    ) {
+      const ends = new Date(updated.endsOn);
+      ends.setHours(23, 59, 59, 999);
+      await this.prisma.driverUnavailability.create({
+        data: {
+          companyId: user.companyId,
+          driverId: updated.employee.driver.id,
+          kind: updated.type === 'maladie' ? 'maladie' : 'conges',
+          reason: `Congé RH #${updated.id.slice(-6)} — ${updated.type}`,
+          startsAt: updated.startsOn,
+          endsAt: ends,
+        },
+      });
+    }
+    return updated;
   }
 }
 

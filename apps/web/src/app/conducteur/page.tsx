@@ -1,356 +1,228 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
-import { api, setToken } from '@/lib/api';
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { ServiceCard } from './components/ServiceCard';
+import {
+  DAY_SHORT,
+  type Assignment,
+  type DayMarker,
+  weekDays,
+  ymd,
+} from './lib';
 
-type Tab = 'today' | 'planning' | 'messages' | 'documents' | 'space';
+type TodayPayload = {
+  date: string;
+  assignments: Assignment[];
+  rests: Array<{ id: string; kind: string }>;
+  leave?: { type: string; status: string } | null;
+  next: Assignment | null;
+  tasks: Array<{ id: string; label: string; days: number; kind: string }>;
+  unreadMessages: number;
+  driver: { firstName: string; lastName: string; depot?: string };
+};
 
-export default function DriverPortalPage() {
-  const { me, loading, login, logout, refresh } = useAuth();
-  const [tab, setTab] = useState<Tab>('today');
-  const [email, setEmail] = useState('conducteur@horizon-demo.fr');
-  const [password, setPassword] = useState('Demo-Autocar-OS-2026!');
+export default function DriverHomePage() {
+  const { me } = useAuth();
+  const [selected, setSelected] = useState(ymd(new Date()));
+  const [data, setData] = useState<TodayPayload | null>(null);
+  const [markers, setMarkers] = useState<DayMarker[]>([]);
   const [err, setErr] = useState('');
-  const [today, setToday] = useState<Record<string, unknown> | null>(null);
-  const [planning, setPlanning] = useState<Record<string, unknown> | null>(null);
-  const [messages, setMessages] = useState<unknown[]>([]);
-  const [documents, setDocuments] = useState<unknown[]>([]);
   const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (!me) return;
-    refreshData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [me, tab]);
+  const week = useMemo(() => weekDays(new Date(selected + 'T12:00:00')), [selected]);
 
-  async function refreshData() {
+  const load = useCallback(async () => {
     try {
-      if (tab === 'today') setToday(await api('/portal/me/today'));
-      if (tab === 'planning') setPlanning(await api('/portal/me/planning'));
-      if (tab === 'messages') setMessages(await api('/portal/me/messages'));
-      if (tab === 'documents') setDocuments(await api('/portal/me/documents'));
+      const from = ymd(week[0]);
+      const to = ymd(week[6]);
+      const [day, plan] = await Promise.all([
+        api<TodayPayload>(`/portal/me/today?date=${selected}`),
+        api<{ days: DayMarker[] }>(
+          `/portal/me/planning?from=${from}&to=${to}`,
+        ),
+      ]);
+      setData(day);
+      setMarkers(plan.days || []);
+      setErr('');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Erreur');
     }
-  }
+  }, [selected, week]);
 
-  async function onLogin(e: FormEvent) {
-    e.preventDefault();
-    setErr('');
+  useEffect(() => {
+    if (me) load();
+  }, [me, load]);
+
+  const markerMap = useMemo(() => {
+    const m = new Map<string, DayMarker>();
+    for (const d of markers) m.set(d.date, d);
+    return m;
+  }, [markers]);
+
+  async function priseService(a: Assignment) {
+    setBusy(true);
+    setNote('');
     try {
-      await login(email, password);
+      await api('/portal/me/service-event', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'service_start',
+          missionId: a.mission.id,
+        }),
+      });
+      await api('/portal/me/ack', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'planning_seen',
+          missionId: a.mission.id,
+        }),
+      });
+      setNote('Prise de service enregistrée');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Échec');
+      setErr(e instanceof Error ? e.message : 'Erreur');
+    } finally {
+      setBusy(false);
     }
   }
 
-  if (loading) {
-    return <div className="p-6 text-sm text-[var(--muted)]">Chargement…</div>;
-  }
-
-  if (!me) {
-    return (
-      <div className="space-y-4 p-6">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-action">
-            AUTOCAR OS
-          </p>
-          <h1 className="text-2xl font-bold">Portail conducteur</h1>
-          <p className="text-sm text-[var(--muted)]">
-            Connexion personnelle — n’utilisez pas le téléphone en conduisant.
-          </p>
-        </div>
-        <form onSubmit={onLogin} className="card space-y-3 p-4">
-          <input
-            className="input"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Identifiant"
-          />
-          <input
-            className="input"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Mot de passe"
-          />
-          {err && <p className="text-sm text-danger">{err}</p>}
-          <button className="btn-primary w-full py-3 text-base">Connexion</button>
-        </form>
-      </div>
-    );
-  }
-
-  const next = (today as { next?: { mission: { title: string; origin?: string; destination?: string; startsAt: string }; vehicle?: { plate: string } } } | null)?.next;
-
   return (
-    <div className="flex min-h-screen flex-col pb-20">
-      <header className="sticky top-0 z-10 border-b border-[var(--border)] bg-night px-4 py-3 text-cream">
-        <div className="text-xs uppercase tracking-[0.16em] text-cream/70">
-          AUTOCAR OS
+    <div>
+      <header className="drv-red-head px-4 pb-4 pt-3">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-lg font-bold">
+            {(me?.displayName || 'C').slice(0, 1)}
+          </div>
+          <Link
+            href="/conducteur/plus/profil"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/40"
+            aria-label="Profil"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <circle cx="12" cy="8" r="3.5" />
+              <path d="M5 19c1.5-3.5 4-5 7-5s5.5 1.5 7 5" />
+            </svg>
+          </Link>
         </div>
-        <div className="font-semibold">{me.displayName}</div>
+
+        <div className="flex justify-between gap-1">
+          {week.map((d, i) => {
+            const key = ymd(d);
+            const active = key === selected;
+            const mk = markerMap.get(key);
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setSelected(key)}
+                className="flex flex-1 flex-col items-center gap-1"
+              >
+                <span className="text-[10px] font-semibold text-white/80">
+                  {DAY_SHORT[i]}
+                </span>
+                <span
+                  className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold ${
+                    active
+                      ? 'bg-white text-[var(--drv-red)]'
+                      : 'text-white'
+                  }`}
+                >
+                  {d.getDate()}
+                </span>
+                <span className="flex h-4 min-w-[1.5rem] items-center justify-center text-[9px] font-bold text-white/90">
+                  {mk?.code ? (
+                    mk.code
+                  ) : mk && mk.assignmentCount > 0 ? (
+                    <span className="flex gap-0.5">
+                      {Array.from({
+                        length: Math.min(mk.assignmentCount, 4),
+                      }).map((_, j) => (
+                        <span
+                          key={j}
+                          className="h-1 w-1 rounded-full bg-white"
+                        />
+                      ))}
+                    </span>
+                  ) : (
+                    ''
+                  )}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </header>
 
-      <main className="flex-1 space-y-4 p-4">
-        {err && <p className="text-sm text-danger">{err}</p>}
-        {note && <p className="text-sm text-ok">{note}</p>}
-
-        {tab === 'today' && (
-          <div className="space-y-3">
-            <h2 className="text-lg font-bold">Aujourd’hui</h2>
-            {next ? (
-              <div className="card p-4">
-                <div className="text-xs text-[var(--muted)]">Prochain service</div>
-                <div className="text-lg font-semibold">{next.mission.title}</div>
-                <div className="text-sm">
-                  {new Date(next.mission.startsAt).toLocaleTimeString('fr-FR', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}{' '}
-                  · {next.mission.origin} → {next.mission.destination}
-                </div>
-                <div className="text-sm text-[var(--muted)]">
-                  Véhicule {next.vehicle?.plate || '—'}
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-[var(--muted)]">Aucun service publié aujourd’hui.</p>
-            )}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                className="btn-primary py-3"
-                onClick={async () => {
-                  await api('/portal/me/ack', {
-                    method: 'POST',
-                    body: JSON.stringify({ kind: 'planning_seen' }),
-                  });
-                  setNote('Planning marqué comme vu');
-                }}
-              >
-                J’ai vu mon planning
-              </button>
-              <button
-                className="btn-primary py-3"
-                onClick={async () => {
-                  await api('/portal/me/service-event', {
-                    method: 'POST',
-                    body: JSON.stringify({ kind: 'service_start' }),
-                  });
-                  setNote('Prise de service enregistrée');
-                }}
-              >
-                Je prends mon service
-              </button>
-              <button
-                className="btn-ghost border border-[var(--border)] py-3"
-                onClick={async () => {
-                  await api('/portal/me/service-event', {
-                    method: 'POST',
-                    body: JSON.stringify({ kind: 'service_end' }),
-                  });
-                  setNote('Fin de service enregistrée');
-                }}
-              >
-                Je termine
-              </button>
-              <button
-                className="btn-danger py-3"
-                onClick={async () => {
-                  await api('/portal/me/incidents', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      category: 'retard',
-                      description: 'Retard signalé depuis le portail',
-                      severity: 'medium',
-                    }),
-                  });
-                  setNote('Incident transmis à l’exploitation');
-                }}
-              >
-                Signaler incident
-              </button>
-            </div>
-          </div>
-        )}
-
-        {tab === 'planning' && planning && (
-          <div className="space-y-3">
-            <h2 className="text-lg font-bold">Planning (publié)</h2>
-            <p className="text-xs text-[var(--muted)]">
-              Repos et congés affichés distinctement. Non publié = invisible.
-            </p>
-            <div className="space-y-2">
-              {(
-                planning.assignments as Array<{
-                  id: string;
-                  startsAt: string;
-                  mission: { title: string; origin?: string; destination?: string };
-                  vehicle?: { plate: string };
-                }>
-              ).map((a) => (
-                <div key={a.id} className="card p-3">
-                  <div className="font-semibold">{a.mission.title}</div>
-                  <div className="text-sm text-[var(--muted)]">
-                    {new Date(a.startsAt).toLocaleString('fr-FR')} ·{' '}
-                    {a.mission.origin} → {a.mission.destination}
-                  </div>
-                  <div className="text-xs">Véhicule {a.vehicle?.plate}</div>
-                </div>
-              ))}
-            </div>
-            <h3 className="font-semibold">Repos prévus</h3>
-            <ul className="text-sm">
-              {(
-                planning.rests as Array<{
-                  id: string;
-                  kind: string;
-                  startsAt: string;
-                  endsAt: string;
-                }>
-              ).map((r) => (
-                <li key={r.id} className="card mb-2 p-3">
-                  {r.kind} — {new Date(r.startsAt).toLocaleDateString('fr-FR')} →{' '}
-                  {new Date(r.endsAt).toLocaleDateString('fr-FR')}
-                </li>
-              ))}
-            </ul>
-            <h3 className="font-semibold">Congés / absences</h3>
-            <ul className="text-sm">
-              {(
-                planning.leaves as Array<{
-                  id: string;
-                  status: string;
-                  startsOn: string;
-                  endsOn: string;
-                }>
-              ).map((l) => (
-                <li key={l.id} className="card mb-2 p-3">
-                  {l.status} — {new Date(l.startsOn).toLocaleDateString('fr-FR')} →{' '}
-                  {new Date(l.endsOn).toLocaleDateString('fr-FR')}
-                </li>
-              ))}
-            </ul>
-            <h3 className="font-semibold">Retour billet collectif</h3>
-            <button
-              className="btn-primary w-full py-3"
-              onClick={async () => {
-                const a = (
-                  planning.assignments as Array<{ mission: { id: string } }>
-                )[0];
-                if (!a) {
-                  setNote('Aucune mission publiée pour retour billet');
-                  return;
-                }
-                await api('/portal/me/ticket-return', {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    missionId: a.mission.id,
-                    actualPassengers: 45,
-                    ticketNotes: 'Retour billet depuis portail conducteur',
-                  }),
-                });
-                setNote('Retour de billet transmis à l’exploitation');
-              }}
-            >
-              Confirmer retour billet (1re mission)
-            </button>
-          </div>
-        )}
-
-        {tab === 'messages' && (
-          <div className="space-y-3">
-            <h2 className="text-lg font-bold">Messages</h2>
-            <button
-              className="btn-primary w-full py-3"
-              onClick={async () => {
-                await api('/portal/me/messages', {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    subject: 'Contact exploitation',
-                    body: 'Message depuis le portail mobile (DEMO)',
-                  }),
-                });
-                setNote('Message envoyé');
-                setMessages(await api('/portal/me/messages'));
-              }}
-            >
-              Contacter l’exploitation
-            </button>
-            <pre className="card max-h-80 overflow-auto p-3 text-[10px]">
-              {JSON.stringify(messages, null, 2)}
-            </pre>
-          </div>
-        )}
-
-        {tab === 'documents' && (
-          <div className="space-y-3">
-            <h2 className="text-lg font-bold">Documents publiés</h2>
-            <pre className="card max-h-80 overflow-auto p-3 text-[10px]">
-              {JSON.stringify(documents, null, 2)}
-            </pre>
-          </div>
-        )}
-
-        {tab === 'space' && (
-          <div className="space-y-3">
-            <h2 className="text-lg font-bold">Mon espace</h2>
-            <button
-              className="btn-primary w-full py-3"
-              onClick={async () => {
-                const start = new Date();
-                start.setDate(start.getDate() + 30);
-                const end = new Date(start);
-                end.setDate(end.getDate() + 2);
-                await api('/portal/me/leave', {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    startsOn: start.toISOString(),
-                    endsOn: end.toISOString(),
-                    comment: 'Demande depuis mobile',
-                  }),
-                });
-                setNote('Demande de congé envoyée');
-              }}
-            >
-              Demander un congé
-            </button>
-            <button
-              className="btn-ghost w-full border border-[var(--border)] py-3"
-              onClick={async () => {
-                await logout();
-                setToken(null);
-                await refresh();
-              }}
-            >
-              Déconnexion
-            </button>
-          </div>
-        )}
-      </main>
-
-      <nav className="fixed bottom-0 left-0 right-0 mx-auto flex max-w-lg border-t border-[var(--border)] bg-[var(--bg-elevated)]">
-        {(
-          [
-            ['today', 'Aujourd’hui'],
-            ['planning', 'Planning'],
-            ['messages', 'Messages'],
-            ['documents', 'Docs'],
-            ['space', 'Espace'],
-          ] as const
-        ).map(([k, label]) => (
-          <button
-            key={k}
-            className={`flex-1 py-3 text-[11px] font-semibold ${
-              tab === k ? 'text-action' : 'text-[var(--muted)]'
+      <div className="-mt-1 space-y-4 px-4 pb-6 pt-5">
+        {(err || note) && (
+          <div
+            className={`rounded-xl px-3 py-2 text-sm ${
+              err
+                ? 'bg-rose-50 text-rose-700'
+                : 'bg-emerald-50 text-emerald-800'
             }`}
-            onClick={() => setTab(k)}
           >
-            {label}
-          </button>
-        ))}
-      </nav>
+            {err || note}
+          </div>
+        )}
+
+        {data?.leave && (
+          <div className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            Absence prévue ce jour ({data.leave.type}) — {data.leave.status}
+          </div>
+        )}
+
+        {data?.assignments?.length ? (
+          data.assignments.map((a, i) => (
+            <ServiceCard
+              key={a.id}
+              assignment={a}
+              index={i}
+              total={data.assignments.length}
+              starting={busy}
+              onStart={() => priseService(a)}
+            />
+          ))
+        ) : data?.rests?.length ? (
+          <div className="drv-card p-5 text-center">
+            <div className="text-lg font-bold">Repos</div>
+            <p className="mt-1 text-sm text-[var(--drv-muted)]">
+              Aucun service publié — journée de repos.
+            </p>
+          </div>
+        ) : (
+          <div className="drv-card p-5 text-center">
+            <div className="text-lg font-bold">Aucun service</div>
+            <p className="mt-1 text-sm text-[var(--drv-muted)]">
+              Pas de vacation publiée pour cette date.
+            </p>
+          </div>
+        )}
+
+        {(data?.tasks?.length || 0) > 0 && (
+          <section>
+            <h3 className="mb-2 text-sm font-bold">Tâches en attente</h3>
+            <div className="flex gap-3 overflow-x-auto pb-1">
+              {data!.tasks.map((t) => (
+                <div
+                  key={t.id}
+                  className="drv-card min-w-[7.5rem] shrink-0 p-3"
+                >
+                  <div className="text-2xl font-black text-[var(--drv-red)]">
+                    {t.days >= 0 ? `J+${t.days}` : `J${t.days}`}
+                  </div>
+                  <div className="mt-1 text-[11px] font-medium leading-tight text-[var(--drv-muted)]">
+                    {t.label}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
     </div>
   );
 }

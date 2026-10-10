@@ -69,6 +69,13 @@ model Company {
   prepMonthly PrePayrollMonthlyLine[]
   payrollCounters PayrollCounter[]
   payrollExports PayrollExportBatch[]
+  leaveBalances LeaveBalance[]
+  hrInterviews HrInterview[]
+  trainingCourses TrainingCourse[]
+  trainingSessions TrainingSession[]
+  trainingEnrollments TrainingEnrollment[]
+  payslips Payslip[]
+  payrollBonuses PayrollBonus[]
   maintenanceAlerts MaintenanceAlert[]
   repairRequests RepairRequest[]
   workOrders  WorkOrder[]
@@ -81,6 +88,7 @@ model Company {
   analyticsReports AnalyticsReport[]
   simulations Simulation[]
   clientRequests ClientQuoteRequest[]
+  clientMessages ClientPortalMessage[]
   documentTemplates DocumentTemplate[]
 }
 
@@ -144,6 +152,9 @@ model UserAccount {
   mfaRequired  Boolean  @default(false)
   mfaEnabled   Boolean  @default(false)
   mfaSecret    String?
+  /// Mot de passe temporaire émis par la RH — à changer à la 1ʳᵉ connexion
+  mustChangePassword Boolean @default(false)
+  tempPasswordSetAt DateTime?
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -160,6 +171,11 @@ model UserAccount {
   salesQuotes  Quote[] @relation("QuoteSalesperson")
   managedCustomers Customer[] @relation("CustomerAccountManager")
   salesOrders  Order[] @relation("OrderSalesperson")
+  threadParticipations MessageThreadParticipant[]
+  assignedThreads MessageThread[] @relation("AssignedThreads")
+  driverThreads MessageThread[] @relation("DriverThreads")
+  clientLink ClientAccountLink?
+  clientMessages ClientPortalMessage[]
 
   @@unique([companyId, email])
 }
@@ -272,15 +288,57 @@ model Employee {
   phone          String?
   jobTitle       String?
   hiredAt        DateTime?
+  endedAt        DateTime?
+  /// CDI | CDD | interim | apprenti | saisonnier
+  contractType   String?  @default("CDI")
+  /// Classification convention collective transport
+  classification String?
+  echelon        String?
   contractHours  Float?
+  /// Taux horaire de base (€)
+  baseHourlyRate Float?
+  /// Salaire mensuel brut de référence (€)
+  baseMonthlySalary Float?
+  birthDate      DateTime?
+  birthPlace     String?
+  addressLine1   String?
+  addressLine2   String?
+  postalCode     String?
+  city           String?
+  country        String?  @default("France")
+  nationality    String?
+  /// celibataire | marie | pacse | divorce | veuf
+  familyStatus   String?
+  dependentsCount Int     @default(0)
+  /// Données sensibles — masquer sans hr:sensitive:read
+  socialSecurityNumber String?
+  iban           String?
+  bic            String?
+  emergencyContact String?
+  emergencyPhone String?
+  /// Convention collective
+  collectiveAgreement String? @default("Transports routiers de voyageurs")
+  jobCoefficient String?
+  weeklyHours    Float?
+  trialEndAt     DateTime?
+  mutuelle       String?
+  prevoyance     String?
+  /// Temps plein | Temps partiel | Intermittent
+  workTimeType   String?  @default("Temps plein")
   status         String   @default("active")
   sensitiveNotes String?
+  rhNotes        String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  driver       Driver?
-  accountLink  EmployeeAccountLink?
+  driver        Driver?
+  accountLink   EmployeeAccountLink?
   leaveRequests LeaveRequest[]
+  leaveBalances LeaveBalance[]
+  interviews    HrInterview[]
+  enrollments   TrainingEnrollment[]
+  payslips      Payslip[]
+  bonuses       PayrollBonus[]
 
   @@unique([companyId, matricule])
 }
@@ -404,6 +462,8 @@ model Customer {
   invoices     Invoice[]
   payments     Payment[]
   credits      CustomerCredit[]
+  portalAccounts ClientAccountLink[]
+  portalMessages ClientPortalMessage[]
 
   @@unique([companyId, reference])
   @@index([companyId, name])
@@ -893,13 +953,36 @@ model MessageThread {
   companyId String
   company   Company  @relation(fields: [companyId], references: [id])
   subject   String
+  /// new | open | closed — new = à traiter côté exploitation
   status    String   @default("new")
+  /// driver | internal
+  threadType String  @default("driver")
   driverUserId String?
+  driverUser UserAccount? @relation("DriverThreads", fields: [driverUserId], references: [id])
   missionId String?
+  assignedToUserId String?
+  assignedTo UserAccount? @relation("AssignedThreads", fields: [assignedToUserId], references: [id])
+  lastMessageAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   messages Message[]
+  participants MessageThreadParticipant[]
+
+  @@index([companyId, threadType, status])
+  @@index([companyId, driverUserId])
+}
+
+model MessageThreadParticipant {
+  id         String   @id @default(cuid())
+  threadId   String
+  thread     MessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  userId     String
+  user       UserAccount @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@unique([threadId, userId])
 }
 
 model Message {
@@ -911,6 +994,8 @@ model Message {
   body      String
   createdAt DateTime @default(now())
   readAt    DateTime?
+
+  @@index([threadId, createdAt])
 }
 
 model QualityEvent {
@@ -1352,6 +1437,188 @@ model PayrollExportBatch {
   exportedAt  DateTime?
 }
 
+/** Soldes de congés / RTT / récupération */
+model LeaveBalance {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  year        Int
+  /// conges | rtt | recuperation | maladie
+  type        String   @default("conges")
+  entitled    Float    @default(25)
+  used        Float    @default(0)
+  remaining   Float    @default(25)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([companyId, employeeId, year, type])
+}
+
+/** Entretiens RH (annuel, professionnel, suivi, disciplinaire…) */
+model HrInterview {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id])
+  employeeId       String
+  employee         Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  interviewerUserId String?
+  /// annuel | professionnel | embauche | suivi | disciplinaire | retour_conges
+  kind             String   @default("annuel")
+  title            String
+  scheduledAt      DateTime?
+  heldAt           DateTime?
+  /// planned | done | cancelled
+  status           String   @default("planned")
+  objectives       String?
+  notes            String?
+  nextActions      String?
+  rating           Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([companyId, status])
+  @@index([companyId, employeeId])
+}
+
+/** Catalogue formations (FCO, permis, sécurité, métier…) */
+model TrainingCourse {
+  id             String   @id @default(cuid())
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id])
+  code           String
+  title          String
+  /// FCO | permis | securite | metier | management | autre
+  category       String   @default("metier")
+  durationHours  Float    @default(7)
+  description    String?
+  mandatory      Boolean  @default(false)
+  validityMonths Int?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  sessions TrainingSession[]
+
+  @@unique([companyId, code])
+}
+
+model TrainingSession {
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id])
+  courseId     String
+  course       TrainingCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  startsAt     DateTime
+  endsAt       DateTime
+  location     String?
+  provider     String?
+  capacity     Int      @default(12)
+  costPerSeat  Float?
+  /// planned | open | completed | cancelled
+  status       String   @default("planned")
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  enrollments TrainingEnrollment[]
+
+  @@index([companyId, startsAt])
+}
+
+model TrainingEnrollment {
+  id             String   @id @default(cuid())
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id])
+  sessionId      String
+  session        TrainingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// inscrit | present | absent | reussi | echec | annule
+  status         String   @default("inscrit")
+  certificateRef String?
+  completedAt    DateTime?
+  score          Float?
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  @@unique([sessionId, employeeId])
+  @@index([companyId, employeeId])
+}
+
+/** Fiche de paie éditable, reliée aux heures planning / prépaye */
+model Payslip {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id])
+  employeeId       String
+  employee         Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  yearMonth        String
+  /// draft | validated | paid | cancelled
+  status           String   @default("draft")
+  workedHours      Float    @default(0)
+  overtimeHours    Float    @default(0)
+  nightHours       Float    @default(0)
+  leaveDays        Float    @default(0)
+  absenceDays      Float    @default(0)
+  baseSalary       Float    @default(0)
+  grossAmount      Float    @default(0)
+  employeeCharges  Float    @default(0)
+  employerCharges  Float    @default(0)
+  netAmount        Float    @default(0)
+  /// Détail heures (JSON)
+  sourceHoursJson  String   @default("{}")
+  notes            String?
+  generatedFromPrep Boolean @default(false)
+  validatedAt      DateTime?
+  paidAt           DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  lines PayslipLine[]
+
+  @@unique([companyId, employeeId, yearMonth])
+  @@index([companyId, yearMonth, status])
+}
+
+model PayslipLine {
+  id         String  @id @default(cuid())
+  payslipId  String
+  payslip    Payslip @relation(fields: [payslipId], references: [id], onDelete: Cascade)
+  code       String
+  label      String
+  /// earning | deduction | info | employer
+  kind       String  @default("earning")
+  quantity   Float   @default(0)
+  rate       Float   @default(0)
+  amount     Float   @default(0)
+  sortOrder  Int     @default(100)
+
+  @@index([payslipId])
+}
+
+/** Primes & indemnités (récurrentes ou ponctuelles) */
+model PayrollBonus {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// Code rubrique (PRIM_ANC, PRIM_DIM, INDEM_PANIER…)
+  code        String
+  label       String
+  amount      Float
+  /// recurring | one_shot
+  kind        String   @default("one_shot")
+  /// Si one_shot : mois d’application YYYY-MM ; si recurring : optionnel
+  yearMonth   String?
+  active      Boolean  @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([companyId, employeeId])
+  @@index([companyId, yearMonth])
+}
+
 /** Phase 6 — Atelier / stocks / carburant */
 model MaintenanceAlert {
   id          String   @id @default(cuid())
@@ -1536,6 +1803,39 @@ model Simulation {
 }
 
 /** Phase 8 — Portail client */
+model ClientAccountLink {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  user       UserAccount @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// owner | billing | ops
+  portalRole String   @default("owner")
+  createdAt  DateTime @default(now())
+
+  @@index([customerId])
+}
+
+model ClientPortalMessage {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id])
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  authorId   String?
+  author     UserAccount? @relation(fields: [authorId], references: [id])
+  /// client | staff
+  authorKind String   @default("client")
+  subject    String?
+  body       String
+  /// open | answered | closed
+  status     String   @default("open")
+  createdAt  DateTime @default(now())
+  readAt     DateTime?
+
+  @@index([companyId, customerId, createdAt])
+}
+
 model ClientQuoteRequest {
   id          String   @id @default(cuid())
   companyId   String
@@ -1544,10 +1844,15 @@ model ClientQuoteRequest {
   contactName String
   email       String
   phone       String?
+  /// occasionnel | scolaire | entreprise | evenement | autre
+  tripType    String?  @default("occasionnel")
   origin      String?
   destination String?
   departureAt DateTime?
+  returnAt    DateTime?
   passengers  Int      @default(0)
+  vehicleHint String?
+  budgetHint  String?
   message     String?
   status      String   @default("new")
   createdAt   DateTime @default(now())

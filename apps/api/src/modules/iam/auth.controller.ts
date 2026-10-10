@@ -44,6 +44,16 @@ class ActivateDto {
   password!: string;
 }
 
+class ChangePasswordDto {
+  @IsString()
+  @MinLength(1)
+  currentPassword!: string;
+
+  @IsString()
+  @MinLength(10)
+  newPassword!: string;
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -120,10 +130,24 @@ export class AuthController {
     return this.auth.activateInvitation(dto.token, dto.password);
   }
 
+  @Post('change-password')
+  @UseGuards(JwtAuthGuard)
+  changePassword(
+    @CurrentUser() user: RequestUser,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.auth.changePassword(
+      user.userId,
+      dto.currentPassword,
+      dto.newPassword,
+    );
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async me(@CurrentUser() user: RequestUser) {
     const ctx = await this.permissions.loadContext(user.userId);
+    const account = await this.auth.getAccountFlags(user.userId);
     return {
       id: user.userId,
       email: user.email,
@@ -131,6 +155,8 @@ export class AuthController {
       companyId: user.companyId,
       depotIds: user.depotIds,
       isSuperAdmin: user.isSuperAdmin,
+      mustChangePassword: !!account?.mustChangePassword,
+      status: account?.status,
       permissions: ctx ? [...ctx.permissionKeys] : [],
       denied: ctx ? [...ctx.deniedKeys] : [],
     };

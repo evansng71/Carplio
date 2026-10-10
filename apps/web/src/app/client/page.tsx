@@ -1,83 +1,232 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { api } from '@/lib/api';
+import {
+  IconBus,
+  IconClipboard,
+  IconFile,
+  IconInvoice,
+  IconMail,
+  IconPortal,
+  IconRoute,
+  IconUsers,
+} from '@/components/Icons';
+import { badgeClass, dt } from './lib';
 
-const API = process.env.NEXT_PUBLIC_API_URL || '/api';
+type Home = {
+  customer: { name: string; tradeName?: string | null; reference?: string | null };
+  counts: {
+    quotesOpen: number;
+    tripsUpcoming: number;
+    invoicesOpen: number;
+    invoicesOverdue: number;
+    requestsOpen: number;
+    messagesOpen: number;
+    docsCount: number;
+  };
+  nextTrip?: {
+    id: string;
+    number: string;
+    title: string;
+    startsAt: string;
+    origin?: string | null;
+    destination?: string | null;
+    passengers: number;
+  } | null;
+};
 
-export default function PublicClientPortal() {
-  const [form, setForm] = useState({
-    contactName: '',
-    email: '',
-    phone: '',
-    origin: '',
-    destination: '',
-    departureAt: '',
-    passengers: 40,
-    message: '',
-  });
-  const [ok, setOk] = useState('');
+export default function ClientHomePage() {
+  const [data, setData] = useState<Home | null>(null);
   const [err, setErr] = useState('');
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setErr('');
-    setOk('');
-    const res = await fetch(`${API}/public/quote-requests`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setErr(data.message || 'Erreur');
-      return;
-    }
-    setOk('Demande envoyée — un commercial vous recontactera.');
-    setForm({
-      contactName: '',
-      email: '',
-      phone: '',
-      origin: '',
-      destination: '',
-      departureAt: '',
-      passengers: 40,
-      message: '',
-    });
-  }
+  useEffect(() => {
+    api<Home>('/client-portal/me')
+      .then(setData)
+      .catch((e) => setErr(e.message));
+  }, []);
+
+  if (err)
+    return (
+      <p className="text-sm text-rose-600">
+        {err.includes('Espace client')
+          ? 'Ce compte n’est pas lié à un client. Utilisez client@villeurbanne-demo.fr'
+          : err}
+      </p>
+    );
+  if (!data)
+    return <p className="text-sm text-[var(--cli-muted)]">Chargement…</p>;
+
+  const c = data.counts;
+  const kpis = [
+    {
+      label: 'Voyages à venir',
+      value: c.tripsUpcoming,
+      href: '/client/voyages',
+      tone: 'cyan',
+      Icon: IconRoute,
+    },
+    {
+      label: 'Devis à traiter',
+      value: c.quotesOpen,
+      href: '/client/devis',
+      tone: 'amber',
+      Icon: IconFile,
+    },
+    {
+      label: 'Factures ouvertes',
+      value: c.invoicesOpen,
+      href: '/client/factures',
+      tone: 'teal',
+      Icon: IconInvoice,
+    },
+    {
+      label: 'Messages',
+      value: c.messagesOpen,
+      href: '/client/messages',
+      tone: 'sky',
+      Icon: IconMail,
+    },
+  ] as const;
+
+  const spots = [
+    {
+      href: '/client/demande',
+      title: 'Demander un devis',
+      desc: 'Occasionnel, scolaire, événement… réponse sous 48h.',
+      tone: 'cyan',
+      Icon: IconClipboard,
+    },
+    {
+      href: '/client/documents',
+      title: `Documents (${c.docsCount})`,
+      desc: 'BC, assurances et pièces à transmettre.',
+      tone: 'teal',
+      Icon: IconPortal,
+    },
+    {
+      href: '/client/factures',
+      title: 'Facturation',
+      desc:
+        c.invoicesOverdue > 0
+          ? `${c.invoicesOverdue} facture(s) en retard à consulter.`
+          : 'Échéances, paiements et avoirs.',
+      tone: c.invoicesOverdue > 0 ? 'rose' : 'emerald',
+      Icon: IconInvoice,
+    },
+    {
+      href: '/client/profil',
+      title: 'Profil & lieux',
+      desc: 'Coordonnées, contacts et destinations favorites.',
+      tone: 'navy',
+      Icon: IconUsers,
+    },
+  ] as const;
 
   return (
-    <div className="relative min-h-screen">
-      <div
-        className="absolute inset-0"
-        style={{
-          background:
-            'linear-gradient(160deg, #0B1F33 0%, #14324F 40%, #1B6CA8 100%)',
-        }}
-      />
-      <div className="relative mx-auto max-w-xl px-6 py-16 text-cream">
-        <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/70">
-          AUTOCAR OS
-        </p>
-        <h1 className="mt-2 text-3xl font-bold">Demande de devis</h1>
-        <p className="mt-2 text-sm text-white/80">
-          Portail client Autocars Horizon — transport occasionnel & groupes.
-        </p>
-        <form onSubmit={submit} className="mt-8 space-y-3 rounded-2xl bg-white p-6 text-night shadow-panel">
-          <input className="input" placeholder="Nom" required value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
-          <input className="input" type="email" placeholder="Email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-          <input className="input" placeholder="Téléphone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <input className="input" placeholder="Origine" value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} />
-            <input className="input" placeholder="Destination" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
-          </div>
-          <input className="input" type="datetime-local" value={form.departureAt} onChange={(e) => setForm({ ...form, departureAt: e.target.value })} />
-          <input className="input" type="number" min={1} value={form.passengers} onChange={(e) => setForm({ ...form, passengers: Number(e.target.value) })} />
-          <textarea className="input" placeholder="Message" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} />
-          {err && <p className="text-sm text-danger">{err}</p>}
-          {ok && <p className="text-sm text-ok">{ok}</p>}
-          <button className="btn-primary w-full py-3">Envoyer la demande</button>
-        </form>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="cli-kicker">{data.customer.reference || 'Client'}</p>
+          <h1 className="cli-h1 mt-1">
+            {data.customer.tradeName || data.customer.name}
+          </h1>
+          <p className="cli-sub">
+            Vue d’ensemble de vos prestations, devis et factures.
+          </p>
+        </div>
+        <Link href="/client/voyages" className="cli-btn cli-btn-secondary">
+          <IconBus size={16} />
+          Voir le planning
+        </Link>
       </div>
+
+      <div className="cli-kpi">
+        {kpis.map((k) => (
+          <Link
+            key={k.label}
+            href={k.href}
+            className={`cli-card cli-card-interactive cli-kpi-card cli-tone-${k.tone}`}
+          >
+            <span className={`cli-ico cli-ico-${k.tone}`}>
+              <k.Icon size={18} />
+            </span>
+            <div className="cli-kpi-value">{k.value}</div>
+            <div className="cli-kpi-label">{k.label}</div>
+          </Link>
+        ))}
+      </div>
+
+      {data.nextTrip && (
+        <section className="cli-card cli-hero-trip">
+          <div className="cli-hero-trip-main">
+            <div className="flex items-center gap-2">
+              <span className="cli-ico cli-ico-cyan">
+                <IconRoute size={18} />
+              </span>
+              <span className="cli-kicker">Prochain voyage</span>
+            </div>
+            <h2 className="mt-3 text-2xl font-bold tracking-tight">
+              {data.nextTrip.title}
+            </h2>
+            <p className="mt-1 text-[var(--cli-muted)]">
+              {data.nextTrip.origin} → {data.nextTrip.destination}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2 text-sm">
+              <span className="rounded-full bg-cyan-50 px-3 py-1 font-semibold text-cyan-800">
+                {dt(data.nextTrip.startsAt)}
+              </span>
+              <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                {data.nextTrip.passengers} voyageurs
+              </span>
+            </div>
+            <Link href="/client/voyages" className="cli-btn cli-btn-primary mt-5">
+              Détail des voyages
+            </Link>
+          </div>
+          <div className="cli-hero-trip-side">
+            <div className="text-xs font-bold uppercase tracking-[0.14em] text-sky-200/80">
+              Référence
+            </div>
+            <div className="text-2xl font-bold">{data.nextTrip.number}</div>
+            <p className="text-sm text-white/70">
+              Votre prestation est confirmée. Consultez les horaires et le
+              détail dans Voyages.
+            </p>
+            <span className={badgeClass('info')}>Confirmé</span>
+          </div>
+        </section>
+      )}
+
+      <section>
+        <div className="mb-3 flex items-end justify-between">
+          <h2 className="text-lg font-bold">Accès rapides</h2>
+          <Link
+            href="/client/plus"
+            className="text-sm font-semibold text-[var(--cli-accent-deep)]"
+          >
+            Tous les services →
+          </Link>
+        </div>
+        <div className="cli-spot-grid">
+          {spots.map((s) => (
+            <Link
+              key={s.href}
+              href={s.href}
+              className="cli-card cli-card-interactive cli-spot"
+            >
+              <span className={`cli-ico cli-ico-${s.tone}`}>
+                <s.Icon size={18} />
+              </span>
+              <div>
+                <h3>{s.title}</h3>
+                <p>{s.desc}</p>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

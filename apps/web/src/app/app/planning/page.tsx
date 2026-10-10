@@ -199,7 +199,7 @@ export default function PlanningPage() {
     null,
   );
   const [selectedMissionId, setSelectedMissionId] = useState<string | null>(null);
-  const [placeDriverId, setPlaceDriverId] = useState<string | null>(null);
+  const [placeDriverId, setPlaceDriverId] = useState('');
   const [placeVehicleId, setPlaceVehicleId] = useState('');
   const [poolTab, setPoolTab] = useState<PoolTab>('unassigned');
   const [poolSearch, setPoolSearch] = useState('');
@@ -207,6 +207,7 @@ export default function PlanningPage() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [infoOpen, setInfoOpen] = useState(true);
 
   const load = useCallback(() => {
     return api<Board>(
@@ -243,6 +244,62 @@ export default function PlanningPage() {
     return map;
   }, [data]);
 
+  /** Stats jour par véhicule (vue véhicules) */
+  const statsByVehicle = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        tteHours: number;
+        vacCount: number;
+        debut: string | null;
+        primaryDriver: string | null;
+        driversUsed: string[];
+      }
+    >();
+    if (!data) return map;
+    for (const v of data.vehicles) {
+      const mine = data.assignments
+        .filter((a) => a.vehicleId === v.id)
+        .sort(
+          (a, b) =>
+            new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
+        );
+      const tteHours =
+        Math.round(
+          (mine.reduce(
+            (s, a) =>
+              s +
+              Math.max(
+                0,
+                new Date(a.endsAt).getTime() - new Date(a.startsAt).getTime(),
+              ),
+            0,
+          ) /
+            3600000) *
+            100,
+        ) / 100;
+      const driversUsed = [
+        ...new Set(
+          mine
+            .map((a) =>
+              a.driver
+                ? `${a.driver.employee.lastName.toUpperCase()} ${a.driver.employee.firstName}`
+                : null,
+            )
+            .filter(Boolean) as string[],
+        ),
+      ];
+      map.set(v.id, {
+        tteHours,
+        vacCount: mine.length,
+        debut: mine[0]?.startsAt || null,
+        primaryDriver: driversUsed[0] || null,
+        driversUsed,
+      });
+    }
+    return map;
+  }, [data]);
+
   const poolRows = useMemo(() => {
     if (!data) return [];
     const src =
@@ -274,16 +331,24 @@ export default function PlanningPage() {
     setFrom(localYmd(date));
   }
 
-  async function placeOnDriver(
-    driverId: string,
-    vehicleId?: string,
-    missionId?: string,
-  ) {
-    const mid = missionId || selectedMissionId;
+  async function placeMission(opts?: {
+    missionId?: string;
+    driverId?: string;
+    vehicleId?: string;
+  }) {
+    const mid = opts?.missionId || selectedMissionId;
+    const driverId =
+      opts?.driverId !== undefined ? opts.driverId : placeDriverId;
+    const vehicleId =
+      opts?.vehicleId !== undefined ? opts.vehicleId : placeVehicleId;
     if (!mid) {
       setErr(
         'Sélectionnez d’abord une mission non affectée dans le panneau du bas',
       );
+      return;
+    }
+    if (!driverId && !vehicleId) {
+      setErr('Choisissez un conducteur et/ou un véhicule avant de placer');
       return;
     }
     setBusy(true);
@@ -294,17 +359,37 @@ export default function PlanningPage() {
         method: 'POST',
         body: JSON.stringify({
           missionId: mid,
-          driverId,
-          vehicleId: vehicleId || placeVehicleId || undefined,
+          driverId: driverId || undefined,
+          vehicleId: vehicleId || undefined,
           publish: true,
         }),
       });
-      setMsg(
-        `Mission placée sur le planning (${a.mission?.number || mid})`,
-      );
+      setMsg(`Mission placée sur le planning (${a.mission?.number || mid})`);
       setSelectedMissionId(null);
-      setPlaceDriverId(null);
+      setPlaceDriverId('');
+      setPlaceVehicleId('');
       setSelectedAssignmentId(a.id);
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reassignSelected(patch: {
+    driverId?: string | null;
+    vehicleId?: string | null;
+  }) {
+    if (!selectedAssignmentId) return;
+    setBusy(true);
+    setErr('');
+    try {
+      await api(`/planning/assignments/${selectedAssignmentId}/reassign`, {
+        method: 'POST',
+        body: JSON.stringify(patch),
+      });
+      setMsg('Affectation mise à jour');
       await load();
     } catch (e) {
       setErr((e as Error).message);
@@ -403,8 +488,8 @@ export default function PlanningPage() {
           </h1>
           <p className="text-xs text-[var(--muted)]">
             {data.conflicts.length} conflit(s) · {data.pool.unassigned.length}{' '}
-            non affectée(s) · sélectionnez une mission puis un conducteur pour
-            placer
+            non affectée(s) · conducteur et véhicule se choisissent
+            indépendamment
           </p>
         </div>
         <div className="flex max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5">
@@ -526,15 +611,26 @@ export default function PlanningPage() {
       {selectedMissionId && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-action/30 bg-action/5 px-3 py-1.5 text-sm">
           <span className="font-medium">
-            Mission sélectionnée : {selectedPoolMission?.number} — cliquez une
-            ligne conducteur pour placer
+            Mission {selectedPoolMission?.number}
           </span>
           <select
-            className="input w-auto text-sm"
+            className="input w-auto min-w-[10rem] text-sm"
+            value={placeDriverId}
+            onChange={(e) => setPlaceDriverId(e.target.value)}
+          >
+            <option value="">Conducteur —</option>
+            {data.drivers.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.employee.lastName.toUpperCase()} {d.employee.firstName}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input w-auto min-w-[10rem] text-sm"
             value={placeVehicleId}
             onChange={(e) => setPlaceVehicleId(e.target.value)}
           >
-            <option value="">Véhicule auto</option>
+            <option value="">Véhicule —</option>
             {data.vehicles.map((v) => (
               <option key={v.id} value={v.id}>
                 {v.fleetNumber} · {v.plate} · {v.seats} pl.
@@ -543,18 +639,39 @@ export default function PlanningPage() {
           </select>
           <button
             type="button"
-            className="btn-ghost text-sm"
-            onClick={() => setSelectedMissionId(null)}
+            className="btn-primary text-sm"
+            disabled={busy || (!placeDriverId && !placeVehicleId)}
+            onClick={() => void placeMission()}
           >
-            Annuler sélection
+            Placer
+          </button>
+          <span className="text-xs text-[var(--muted)]">
+            Cliquez une ligne pour remplir, puis Placer
+          </span>
+          <button
+            type="button"
+            className="btn-ghost text-sm"
+            onClick={() => {
+              setSelectedMissionId(null);
+              setPlaceDriverId('');
+              setPlaceVehicleId('');
+            }}
+          >
+            Annuler
           </button>
         </div>
       )}
 
       {/* Main split: Gantt + detail */}
-      <div className="grid min-h-[360px] flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="card min-h-[320px] overflow-hidden p-0">
-          <div className="h-full min-h-[300px] overflow-auto">
+      <div
+        className={`grid min-h-[420px] flex-1 gap-2 ${
+          infoOpen
+            ? 'lg:grid-cols-[minmax(0,1fr)_200px]'
+            : 'lg:grid-cols-[minmax(0,1fr)_auto]'
+        }`}
+      >
+        <div className="card min-h-[400px] overflow-hidden p-0">
+          <div className="h-full min-h-[380px] overflow-auto">
             <div style={{ minWidth: isDay ? ganttWidth + 340 : ganttWidth + 200 }}>
               {/* Header hours */}
               <div
@@ -565,11 +682,13 @@ export default function PlanningPage() {
                     : '200px 1fr',
                 }}
               >
-                <div className="px-3 py-2 font-semibold">Conducteur</div>
+                <div className="px-3 py-2 font-semibold">
+                  {resource === 'drivers' ? 'Conducteur' : 'Véhicule'}
+                </div>
                 {isDay && (
                   <>
                     <div className="border-l border-[var(--border)] px-2 py-2">
-                      Véhicule
+                      {resource === 'drivers' ? 'Véhicule' : 'Conducteur'}
                     </div>
                     <div className="border-l border-[var(--border)] px-1 py-2 text-center">
                       TTE
@@ -629,13 +748,14 @@ export default function PlanningPage() {
               {(resource === 'drivers' ? data.drivers : data.vehicles).map(
                 (row) => {
                   const isDriver = resource === 'drivers';
-                  const driverId = isDriver ? row.id : null;
-                  const vehicleId = !isDriver ? row.id : null;
                   const label = isDriver
                     ? `${(row as Board['drivers'][0]).employee.lastName.toUpperCase()} ${(row as Board['drivers'][0]).employee.firstName}`
                     : `${(row as Board['vehicles'][0]).fleetNumber} · ${(row as Board['vehicles'][0]).plate}`;
-                  const stats = isDriver
+                  const dStats = isDriver
                     ? statsByDriver.get(row.id)
+                    : undefined;
+                  const vStats = !isDriver
+                    ? statsByVehicle.get(row.id)
                     : undefined;
                   const blocks = data.assignments.filter((a) =>
                     isDriver ? a.driverId === row.id : a.vehicleId === row.id,
@@ -646,20 +766,20 @@ export default function PlanningPage() {
                   const unavs = isDriver
                     ? data.driverUnavs.filter((u) => u.driverId === row.id)
                     : [];
-                  const placing =
-                    selectedMissionId &&
-                    placeDriverId === row.id &&
-                    isDriver;
-                  const canPlace =
-                    !!selectedMissionId && isDriver && !stats?.weeklyRest;
+                  const selectedOnRow = isDriver
+                    ? placeDriverId === row.id
+                    : placeVehicleId === row.id;
+                  const canPick =
+                    !!selectedMissionId &&
+                    !(isDriver && dStats?.weeklyRest);
 
                   return (
                     <div
                       key={row.id}
                       className={`grid border-b border-[var(--border)] ${
-                        canPlace ? 'cursor-pointer hover:bg-action/5' : ''
-                      } ${placing ? 'bg-action/10' : ''} ${
-                        stats?.weeklyRest ? 'bg-slate-100/80' : ''
+                        canPick ? 'cursor-pointer hover:bg-action/5' : ''
+                      } ${selectedOnRow && selectedMissionId ? 'bg-action/10' : ''} ${
+                        dStats?.weeklyRest ? 'bg-slate-100/80' : ''
                       }`}
                       style={{
                         gridTemplateColumns: isDay
@@ -668,51 +788,56 @@ export default function PlanningPage() {
                         minHeight: 44,
                       }}
                       onClick={() => {
-                        if (!canPlace || !driverId) return;
-                        setPlaceDriverId(driverId);
-                        placeOnDriver(driverId, placeVehicleId || undefined);
+                        if (!canPick || !selectedMissionId) return;
+                        if (isDriver) setPlaceDriverId(row.id);
+                        else setPlaceVehicleId(row.id);
                       }}
                     >
                       <div className="flex items-center gap-2 truncate px-3 text-xs font-semibold">
                         <span
                           className={`inline-block h-2 w-2 shrink-0 rounded-full ${
-                            stats?.overtime
+                            dStats?.overtime
                               ? 'bg-rose-500'
-                              : stats?.weeklyRest
+                              : dStats?.weeklyRest
                                 ? 'bg-slate-400'
-                                : 'bg-emerald-500'
+                                : blocks.length
+                                  ? 'bg-emerald-500'
+                                  : 'bg-slate-300'
                           }`}
                         />
                         <span className="truncate">{label}</span>
                       </div>
-                      {isDay && isDriver && (
+                      {isDay && (
                         <>
-                          <div className="flex items-center border-l border-[var(--border)] px-2 text-[11px] text-[var(--muted)]">
-                            {stats?.primaryVehicle
-                              ? `${stats.primaryVehicle.fleetNumber}`
-                              : stats?.vehiclesUsed[0] || '—'}
+                          <div className="flex items-center truncate border-l border-[var(--border)] px-2 text-[11px] text-[var(--muted)]">
+                            {isDriver
+                              ? dStats?.primaryVehicle
+                                ? dStats.primaryVehicle.fleetNumber
+                                : dStats?.vehiclesUsed[0] || '—'
+                              : vStats?.primaryDriver || '—'}
                           </div>
                           <div
                             className={`flex items-center justify-center border-l border-[var(--border)] text-[11px] font-semibold tabular-nums ${
-                              stats?.overtime ? 'bg-rose-100 text-rose-800' : ''
+                              dStats?.overtime || (vStats && vStats.tteHours > 9)
+                                ? 'bg-rose-100 text-rose-800'
+                                : ''
                             }`}
                           >
-                            {stats ? stats.tteHours.toFixed(2) : '0.00'}
+                            {(isDriver
+                              ? dStats?.tteHours
+                              : vStats?.tteHours
+                            )?.toFixed(2) ?? '0.00'}
                           </div>
                           <div className="flex items-center justify-center border-l border-[var(--border)] text-[11px] tabular-nums">
-                            {stats?.vacCount ?? 0}
+                            {isDriver
+                              ? (dStats?.vacCount ?? 0)
+                              : (vStats?.vacCount ?? 0)}
                           </div>
                           <div className="flex items-center justify-center border-l border-[var(--border)] text-[11px] tabular-nums">
-                            {fmtTime(stats?.debut)}
+                            {fmtTime(
+                              isDriver ? dStats?.debut : vStats?.debut,
+                            )}
                           </div>
-                        </>
-                      )}
-                      {isDay && !isDriver && (
-                        <>
-                          <div className="border-l border-[var(--border)]" />
-                          <div className="border-l border-[var(--border)]" />
-                          <div className="border-l border-[var(--border)]" />
-                          <div className="border-l border-[var(--border)]" />
                         </>
                       )}
                       <div
@@ -733,7 +858,7 @@ export default function PlanningPage() {
                             />
                           ))}
 
-                        {stats?.weeklyRest && isDay && (
+                        {dStats?.weeklyRest && isDay && (
                           <div className="absolute inset-y-1 left-[5%] right-[5%] flex items-center justify-center rounded bg-slate-300/70 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                             Repos hebdomadaire
                           </div>
@@ -842,89 +967,94 @@ export default function PlanningPage() {
           </div>
         </div>
 
-        {/* Detail panel */}
-        <aside className="card min-h-0 overflow-auto p-4">
-          <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-[var(--muted)]">
-            Informations
-          </h2>
-          {!detailMission && (
-            <p className="text-sm text-[var(--muted)]">
-              Cliquez une vacation sur le Gantt, ou une mission non affectée
-              ci-dessous.
+        {/* Detail panel — compact, secondary */}
+        <aside
+          className={`card min-h-0 overflow-auto ${
+            infoOpen ? 'p-3' : 'flex w-9 items-start justify-center p-1'
+          }`}
+        >
+          <button
+            type="button"
+            className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)] hover:text-night"
+            onClick={() => setInfoOpen((o) => !o)}
+            title={infoOpen ? 'Réduire' : 'Afficher les infos'}
+          >
+            {infoOpen ? 'Infos ▸' : '◂'}
+          </button>
+          {infoOpen && !detailMission && (
+            <p className="text-xs text-[var(--muted)]">
+              Vacation ou mission non affectée.
             </p>
           )}
-          {detailMission && (
-            <div className="space-y-3 text-sm">
+          {infoOpen && detailMission && (
+            <div className="space-y-2 text-xs">
               <div>
-                <div className="text-lg font-bold">{detailMission.number}</div>
-                <div className="font-medium">{detailMission.title}</div>
-                <div className="text-xs text-[var(--muted)]">
+                <div className="text-sm font-bold">{detailMission.number}</div>
+                <div className="font-medium leading-snug">
+                  {detailMission.title}
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">
                   {detailMission.order?.customer?.name || '—'}
-                  {detailMission.order?.quote?.number
-                    ? ` · Devis ${detailMission.order.quote.number}`
-                    : ''}
                 </div>
               </div>
-              <div className="rounded-lg bg-[var(--surface-2)] p-3 text-xs leading-relaxed">
+              <div className="rounded-md bg-[var(--surface-2)] p-2 text-[11px] leading-relaxed">
                 <div>
-                  <strong>Durée :</strong>{' '}
                   {durationMin(detailMission.startsAt, detailMission.endsAt)} mn
-                </div>
-                <div>
-                  <strong>Départ :</strong> {fmtDateTime(detailMission.startsAt)}
-                </div>
-                <div>
-                  <strong>Arrivée :</strong> {fmtDateTime(detailMission.endsAt)}
-                </div>
-                <div>
-                  <strong>Trajet :</strong> {detailMission.origin || '—'} →{' '}
-                  {detailMission.destination || '—'}
-                </div>
-                {detailMission.originAddress && (
-                  <div>
-                    <strong>Adr. départ :</strong>{' '}
-                    {detailMission.originAddress}
-                  </div>
-                )}
-                {detailMission.destinationAddress && (
-                  <div>
-                    <strong>Adr. arrivée :</strong>{' '}
-                    {detailMission.destinationAddress}
-                  </div>
-                )}
-                <div>
-                  <strong>Passagers :</strong> {detailMission.passengers}
-                  {detailMission.minSeats
-                    ? ` (min ${detailMission.minSeats} pl.)`
-                    : ''}
+                  · {detailMission.passengers} pax
                   {detailMission.requiresPmr ? ' · PMR' : ''}
                 </div>
-                {detailMission.order?.quote?.vehicleCategory && (
-                  <div>
-                    <strong>Famille véhicule :</strong>{' '}
-                    {detailMission.order.quote.vehicleCategory.name}
-                  </div>
-                )}
-                {detailMission.estimatedKm != null && (
-                  <div>
-                    <strong>Km estimés :</strong> {detailMission.estimatedKm}
-                  </div>
-                )}
-                {selectedAssignment?.vehicle && (
-                  <div>
-                    <strong>Véhicule :</strong>{' '}
-                    {selectedAssignment.vehicle.fleetNumber} ·{' '}
-                    {selectedAssignment.vehicle.plate}
-                  </div>
-                )}
-                {selectedAssignment?.driver && (
-                  <div>
-                    <strong>Conducteur :</strong>{' '}
-                    {selectedAssignment.driver.employee.firstName}{' '}
-                    {selectedAssignment.driver.employee.lastName}
-                  </div>
-                )}
+                <div>{fmtTime(detailMission.startsAt)} → {fmtTime(detailMission.endsAt)}</div>
+                <div className="truncate">
+                  {detailMission.origin || '—'} →{' '}
+                  {detailMission.destination || '—'}
+                </div>
               </div>
+
+              {selectedAssignment && (
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-semibold uppercase text-[var(--muted)]">
+                    Conducteur
+                  </label>
+                  <select
+                    className="input w-full text-xs"
+                    disabled={busy}
+                    value={selectedAssignment.driverId || ''}
+                    onChange={(e) =>
+                      void reassignSelected({
+                        driverId: e.target.value || null,
+                      })
+                    }
+                  >
+                    <option value="">— Aucun —</option>
+                    {data.drivers.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.employee.lastName.toUpperCase()}{' '}
+                        {d.employee.firstName}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="block text-[10px] font-semibold uppercase text-[var(--muted)]">
+                    Véhicule
+                  </label>
+                  <select
+                    className="input w-full text-xs"
+                    disabled={busy}
+                    value={selectedAssignment.vehicleId || ''}
+                    onChange={(e) =>
+                      void reassignSelected({
+                        vehicleId: e.target.value || null,
+                      })
+                    }
+                  >
+                    <option value="">— Aucun —</option>
+                    {data.vehicles.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.fleetNumber} · {v.plate}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {parseStops(detailMission.stopsJson).length > 0 && (
                 <div>
@@ -1000,9 +1130,8 @@ export default function PlanningPage() {
                   </>
                 )}
                 {selectedPoolMission && (
-                  <p className="w-full text-xs text-action">
-                    Cliquez une ligne conducteur du Gantt pour placer cette
-                    mission.
+                  <p className="w-full text-[11px] text-action">
+                    Choisissez conducteur et/ou véhicule, puis Placer.
                   </p>
                 )}
               </div>
@@ -1012,7 +1141,7 @@ export default function PlanningPage() {
       </div>
 
       {/* Bottom pool */}
-      <div className="card flex h-[240px] max-h-[32vh] min-h-[160px] shrink-0 flex-col overflow-hidden p-0">
+      <div className="card flex h-[200px] max-h-[28vh] min-h-[140px] shrink-0 flex-col overflow-hidden p-0">
         <div className="flex flex-wrap items-center gap-1 border-b border-[var(--border)] bg-[#f8fafc] px-2 pt-2">
           {(
             [
@@ -1101,24 +1230,16 @@ export default function PlanningPage() {
                         <button
                           type="button"
                           className="btn-primary px-2 py-1 text-[10px]"
-                          disabled={busy || !data.drivers[0]}
+                          disabled={busy}
                           onClick={(e) => {
                             e.stopPropagation();
                             setSelectedMissionId(m.id);
                             setSelectedAssignmentId(null);
-                            const free =
-                              data.drivers.find((d) => {
-                                const st = statsByDriver.get(d.id);
-                                return !st?.weeklyRest;
-                              }) || data.drivers[0];
-                            void placeOnDriver(
-                              free.id,
-                              placeVehicleId || undefined,
-                              m.id,
-                            );
+                            setErr('');
+                            setMsg('');
                           }}
                         >
-                          Placer
+                          Choisir
                         </button>
                       )}
                     </td>

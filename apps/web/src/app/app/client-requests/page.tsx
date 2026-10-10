@@ -28,6 +28,9 @@ export default function ClientRequestsPage() {
       <div>
         <h1 className="text-2xl font-bold">Demandes portail client</h1>
         <p className="text-sm text-[var(--muted)]">
+          Demandes publiques et espace client connecté — conversion en devis.
+        </p>
+        <p className="text-sm text-[var(--muted)]">
           Entrées publiques → conversion en devis.{' '}
           <Link className="text-action" href="/client" target="_blank">
             Ouvrir portail public

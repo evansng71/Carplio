@@ -222,8 +222,8 @@ class PlanningController {
   }
 
   /**
-   * Place une mission non affectée sur un conducteur (et véhicule optionnel).
-   * Horaires = ceux de la mission sauf override.
+   * Place une mission non affectée.
+   * Conducteur et véhicule sont indépendants (au moins l’un des deux requis).
    */
   @Post('place')
   @RequirePermission('planning', 'assignment', 'assign')
@@ -232,8 +232,10 @@ class PlanningController {
     @Body()
     body: {
       missionId: string;
-      driverId: string;
+      driverId?: string;
       vehicleId?: string;
+      /** Si true et véhicule non fourni : tentative d’auto-affectation véhicule */
+      autoVehicle?: boolean;
       startsAt?: string;
       endsAt?: string;
       publish?: boolean;
@@ -247,11 +249,12 @@ class PlanningController {
     if (mission.assignments.length > 0) {
       throw new BadRequestException('Mission déjà affectée — désaffectez d’abord');
     }
-    if (!body.driverId) throw new BadRequestException('Conducteur requis');
+    if (!body.driverId && !body.vehicleId) {
+      throw new BadRequestException('Conducteur ou véhicule requis');
+    }
 
-    let vehicleId = body.vehicleId;
-    if (!vehicleId) {
-      // Reprendre le véhicule déjà utilisé ce jour par le conducteur si possible
+    let vehicleId = body.vehicleId || undefined;
+    if (!vehicleId && body.autoVehicle && body.driverId) {
       const dayStart = startOfDay(mission.startsAt);
       const dayEnd = new Date(dayStart);
       dayEnd.setDate(dayEnd.getDate() + 1);
@@ -283,7 +286,7 @@ class PlanningController {
 
     const assignment = await this.assign(user, {
       missionId: body.missionId,
-      driverId: body.driverId,
+      driverId: body.driverId || undefined,
       vehicleId,
       startsAt: body.startsAt || mission.startsAt.toISOString(),
       endsAt: body.endsAt || mission.endsAt.toISOString(),
@@ -448,17 +451,32 @@ class PlanningController {
   async reassign(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
-    @Body() body: { driverId?: string; vehicleId?: string },
+    @Body()
+    body: {
+      /** null = retirer le conducteur */
+      driverId?: string | null;
+      /** null = retirer le véhicule */
+      vehicleId?: string | null;
+    },
   ) {
     const a = await this.prisma.assignment.findFirst({
       where: { id, companyId: user.companyId },
     });
     if (!a) throw new BadRequestException('Affectation introuvable');
+    const nextDriver =
+      body.driverId === undefined ? a.driverId : body.driverId || null;
+    const nextVehicle =
+      body.vehicleId === undefined ? a.vehicleId : body.vehicleId || null;
+    if (!nextDriver && !nextVehicle) {
+      throw new BadRequestException(
+        'Une affectation doit garder au moins un conducteur ou un véhicule',
+      );
+    }
     return this.prisma.assignment.update({
       where: { id },
       data: {
-        driverId: body.driverId ?? a.driverId,
-        vehicleId: body.vehicleId ?? a.vehicleId,
+        driverId: nextDriver,
+        vehicleId: nextVehicle,
         version: a.version + 1,
         status: a.published ? 'published' : 'planned',
       },

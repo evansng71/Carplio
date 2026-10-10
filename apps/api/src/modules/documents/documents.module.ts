@@ -673,6 +673,140 @@ class DocumentsController {
     res.send(html);
   }
 
+  @Get('print/payslip/:id')
+  @RequirePermission('hr', 'payroll', 'list')
+  async printPayslip(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Query('templateId') templateId: string | undefined,
+    @Query('autoPrint') autoPrint: string | undefined,
+    @Res() res: Response,
+  ) {
+    const payslip = await this.prisma.payslip.findFirst({
+      where: { id, companyId: user.companyId },
+      include: {
+        lines: { orderBy: { sortOrder: 'asc' } },
+        employee: { include: { depot: true } },
+      },
+    });
+    if (!payslip) throw new NotFoundException('Bulletin introuvable');
+    const company = await this.prisma.company.findUnique({
+      where: { id: user.companyId },
+    });
+    const template = await this.getTemplate(
+      user.companyId,
+      'payslip',
+      templateId,
+    );
+    if (!template) throw new BadRequestException('Aucun modèle de bulletin');
+
+    const fmt = (n: number) =>
+      n.toLocaleString('fr-FR', {
+        style: 'currency',
+        currency: 'EUR',
+      });
+    const fmtH = (n: number) =>
+      `${n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h`;
+
+    const linesHtml = `<table><thead><tr><th>Code</th><th>Libellé</th><th style="text-align:right">Qté</th><th style="text-align:right">Taux</th><th style="text-align:right">Montant</th></tr></thead><tbody>${payslip.lines
+      .map(
+        (l) =>
+          `<tr><td>${escapeHtml(l.code)}</td><td>${escapeHtml(l.label)}${
+            l.kind === 'employer'
+              ? ' <span class="muted">(patronal)</span>'
+              : ''
+          }</td><td style="text-align:right">${l.quantity || ''}</td><td style="text-align:right">${
+            l.rate ? l.rate.toFixed(2) : ''
+          }</td><td style="text-align:right">${fmt(l.amount)}</td></tr>`,
+      )
+      .join('')}</tbody></table>`;
+
+    const [y, m] = payslip.yearMonth.split('-').map(Number);
+    const periodLabel = new Date(y, (m || 1) - 1, 1).toLocaleDateString(
+      'fr-FR',
+      { month: 'long', year: 'numeric' },
+    );
+    const ssn = payslip.employee.socialSecurityNumber || '';
+    const ssnMasked = ssn
+      ? `${ssn.slice(0, 1)} ${ssn.slice(1, 3)} ** ** *** *** ${ssn.slice(-2)}`
+      : '—';
+    const empAddr = [
+      payslip.employee.addressLine1,
+      [payslip.employee.postalCode, payslip.employee.city]
+        .filter(Boolean)
+        .join(' '),
+    ]
+      .filter(Boolean)
+      .join('<br/>');
+
+    const data = {
+      today: frToday(),
+      company: {
+        name: company?.name,
+        tradeName: company?.tradeName || company?.name,
+        siret: company?.siret || '—',
+        vatNumber: company?.vatNumber || '—',
+        address: company?.brandTagline || '',
+        logoUrl: company?.logoUrl || '',
+      },
+      employee: {
+        matricule: payslip.employee.matricule,
+        firstName: payslip.employee.firstName,
+        lastName: payslip.employee.lastName,
+        fullName: `${payslip.employee.lastName} ${payslip.employee.firstName}`,
+        jobTitle: payslip.employee.jobTitle || '—',
+        contractType: payslip.employee.contractType || '—',
+        classification: payslip.employee.classification || '—',
+        ssnMasked,
+        address: empAddr || '—',
+        depot: payslip.employee.depot?.name || '—',
+      },
+      payslip: {
+        yearMonth: payslip.yearMonth,
+        periodLabel: periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1),
+        status: payslip.status,
+        workedHours: fmtH(payslip.workedHours),
+        overtimeHours: fmtH(payslip.overtimeHours),
+        nightHours: fmtH(payslip.nightHours),
+        leaveDays: payslip.leaveDays.toFixed(1),
+        baseSalary: fmt(payslip.baseSalary),
+        grossAmount: fmt(payslip.grossAmount),
+        employeeCharges: fmt(payslip.employeeCharges),
+        employerCharges: fmt(payslip.employerCharges),
+        netAmount: fmt(payslip.netAmount),
+        employerCost: fmt(payslip.grossAmount + payslip.employerCharges),
+        linesHtml,
+        notes: payslip.notes || '',
+      },
+    };
+
+    let html = wrapPrintDocument({
+      title: `Bulletin ${payslip.yearMonth} — ${payslip.employee.lastName}`,
+      bodyHtml: renderTemplate(template.bodyHtml, data),
+      headerHtml: template.headerHtml
+        ? renderTemplate(template.headerHtml, data)
+        : null,
+      footerHtml: template.footerHtml
+        ? renderTemplate(template.footerHtml, data)
+        : null,
+      stylesCss: template.stylesCss,
+      paperSize: template.paperSize,
+      orientation: template.orientation,
+    });
+    if (autoPrint === '1' || autoPrint === 'true') {
+      html = html.replace(
+        '</body>',
+        `<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},300)});</script></body>`,
+      );
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="bulletin-${payslip.employee.matricule}-${payslip.yearMonth}.html"`,
+    );
+    res.send(html);
+  }
+
   @Post('missions/:missionId/collective-ticket')
   @RequirePermission('missions', 'mission', 'generate_pdf')
   async generateTicket(
@@ -864,6 +998,45 @@ function sampleDataFor(kind: TemplateKind): Record<string, unknown> {
       },
       driver: { name: 'David Martin' },
       vehicle: { plate: 'AB-123-CD', fleetNumber: 'A12' },
+    };
+  }
+  if (kind === 'payslip') {
+    return {
+      ...base,
+      company: {
+        ...base.company,
+        address: '12 rue du Transport, 69003 Lyon',
+      },
+      employee: {
+        matricule: 'C-1001',
+        firstName: 'David',
+        lastName: 'Martin',
+        fullName: 'Martin David',
+        jobTitle: 'Conducteur ligne',
+        contractType: 'CDI',
+        classification: 'Ouvrier conducteur 3',
+        ssnMasked: '1 88 ** ** *** *** 78',
+        address: '12 rue des Lilas<br/>69100 Villeurbanne',
+        depot: 'Lyon',
+      },
+      payslip: {
+        yearMonth: '2026-10',
+        periodLabel: 'Octobre 2026',
+        status: 'validated',
+        workedHours: '151,67 h',
+        overtimeHours: '8,00 h',
+        nightHours: '4,00 h',
+        leaveDays: '2,0',
+        baseSalary: '2 245,00 €',
+        grossAmount: '2 445,00 €',
+        employeeCharges: '538,00 €',
+        employerCharges: '880,00 €',
+        netAmount: '1 907,00 €',
+        employerCost: '3 325,00 €',
+        notes: 'Prime dimanche incluse',
+        linesHtml:
+          '<table><thead><tr><th>Code</th><th>Libellé</th><th>Montant</th></tr></thead><tbody><tr><td>BASE</td><td>Salaire de base</td><td>2 245,00 €</td></tr><tr><td>PRIM_ANC</td><td>Prime d’ancienneté</td><td>80,00 €</td></tr><tr><td>NET</td><td>Net à payer</td><td>1 907,00 €</td></tr></tbody></table>',
+      },
     };
   }
   return {

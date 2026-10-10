@@ -1,5 +1,5 @@
 /** Same-origin `/api` (Next rewrite → Nest) avoids CORS / blocked :4000 in browser */
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 export type ApiError = { message: string; reason?: string };
 
@@ -45,10 +45,18 @@ export function setToken(token: string | null) {
 }
 
 /** Fetch HTML (print templates) with auth and open in a new window. */
-export async function openPrintHtml(path: string) {
+export async function openPrintHtml(
+  path: string,
+  opts?: { autoPrint?: boolean },
+) {
   const token =
     typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const res = await fetch(`${API_URL}${path}`, {
+  const sep = path.includes('?') ? '&' : '?';
+  const url =
+    opts?.autoPrint === false
+      ? `${API_URL}${path}`
+      : `${API_URL}${path}${sep}autoPrint=1`;
+  const res = await fetch(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     credentials: 'include',
   });
@@ -64,7 +72,7 @@ export async function openPrintHtml(path: string) {
   }
   const html = await res.text();
   const w = window.open('', '_blank');
-  if (!w) throw new Error('Autorisez les pop-ups pour imprimer');
+  if (!w) throw new Error('Autorisez les pop-ups pour imprimer / PDF');
   w.document.open();
   w.document.write(html);
   w.document.close();

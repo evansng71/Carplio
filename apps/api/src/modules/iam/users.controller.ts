@@ -395,6 +395,19 @@ export class UsersController {
     return this.auth.resendInvitation(userId, user.userId, user.companyId);
   }
 
+  @Post('users/:userId/temporary-password')
+  @RequirePermission('portal', 'access', 'manage')
+  temporaryPassword(
+    @CurrentUser() user: RequestUser,
+    @Param('userId') userId: string,
+  ) {
+    return this.auth.setTemporaryPassword(
+      userId,
+      user.userId,
+      user.companyId,
+    );
+  }
+
   @Get('audits')
   @RequirePermission('audits', 'event', 'list')
   audits(@CurrentUser() user: RequestUser, @Query('limit') limit?: string) {
@@ -424,7 +437,13 @@ export class UsersController {
   createAccess(
     @CurrentUser() user: RequestUser,
     @Param('employeeId') employeeId: string,
-    @Body() body: { groupKeys?: string[]; portalRole?: string },
+    @Body()
+    body: {
+      groupKeys?: string[];
+      portalRole?: string;
+      mode?: 'invitation' | 'temporary_password';
+      email?: string;
+    },
   ) {
     return this.auth.createAccessForEmployee({
       companyId: user.companyId,
@@ -432,6 +451,8 @@ export class UsersController {
       actorId: user.userId,
       groupKeys: body.groupKeys,
       portalRole: body.portalRole,
+      mode: body.mode || 'temporary_password',
+      email: body.email,
     });
   }
 
@@ -444,14 +465,24 @@ export class UsersController {
     const employee = await this.prisma.employee.findFirst({
       where: { id: employeeId, companyId: user.companyId },
       include: {
+        driver: { select: { id: true } },
         accountLink: {
           include: {
             user: {
-              include: {
+              select: {
+                id: true,
+                email: true,
+                status: true,
+                displayName: true,
+                lastLoginAt: true,
+                mustChangePassword: true,
+                tempPasswordSetAt: true,
+                createdAt: true,
                 memberships: { include: { group: true, depot: true } },
                 invitations: { orderBy: { createdAt: 'desc' }, take: 5 },
                 sessions: {
                   where: { revokedAt: null, expiresAt: { gt: new Date() } },
+                  select: { id: true, createdAt: true, expiresAt: true, ip: true },
                 },
               },
             },
@@ -459,6 +490,19 @@ export class UsersController {
         },
       },
     });
-    return employee?.accountLink || { status: 'not_created' };
+    if (!employee) return { status: 'not_created' };
+    if (!employee.accountLink) {
+      return {
+        status: 'not_created',
+        email: employee.email,
+        isDriver: !!employee.driver,
+        suggestedGroups: employee.driver ? ['driver'] : ['employee'],
+      };
+    }
+    return {
+      status: 'linked',
+      portalRole: employee.accountLink.portalRole,
+      user: employee.accountLink.user,
+    };
   }
 }

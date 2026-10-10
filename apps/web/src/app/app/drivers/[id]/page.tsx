@@ -141,13 +141,23 @@ export default function DriverDetailPage() {
             </h1>
             <p className="text-sm text-[var(--muted)]">
               {d.employee.matricule} · {d.employee.email || '—'} ·{' '}
-              {d.depot?.name || 'Sans dépôt'}
+              {d.depot?.name || 'Sans dépôt'} · fiche exploitation (planning /
+              FCO)
             </p>
           </div>
         </div>
-        <Link href="/app/drivers" className="btn-secondary">
-          Retour
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href={`/app/employees/${d.employee.id}`}
+            className="btn-primary"
+            title="Contrat, salaire, paie, congés"
+          >
+            Fiche RH
+          </Link>
+          <Link href="/app/drivers" className="btn-secondary">
+            Retour
+          </Link>
+        </div>
       </div>
 
       <div className="flex gap-2">

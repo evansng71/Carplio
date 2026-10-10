@@ -1,20 +1,19 @@
 import type { Metadata, Viewport } from 'next';
+import { DriverShell } from './components/DriverShell';
 
 export const metadata: Metadata = {
-  title: 'AUTOCAR OS — Portail conducteur',
+  title: 'AUTOCAR OS — Espace conducteur',
   manifest: '/conducteur/manifest.webmanifest',
   appleWebApp: { capable: true, title: 'AUTOCAR Conducteur' },
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0B1F33',
+  themeColor: '#E30613',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
 };
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mx-auto min-h-screen max-w-lg bg-[var(--bg)]">{children}</div>
-  );
+  return <DriverShell>{children}</DriverShell>;
 }

@@ -6,17 +6,18 @@ import { UsersModule } from './modules/iam/users.module';
 import { OrgModule } from './modules/org/org.module';
 import { CrmModule } from './modules/crm/crm.module';
 import { HrModule } from './modules/hr/hr.module';
+import { RhSuiteModule } from './modules/hr/rh-suite.module';
 import { FleetModule } from './modules/fleet/fleet.module';
 import { TransportModule } from './modules/transport/transport.module';
 import { PlanningModule } from './modules/planning/planning.module';
 import { CommercialModule } from './modules/commercial/commercial.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { PortalModule } from './modules/portal/portal.module';
+import { MessagingModule } from './modules/messaging/messaging.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { RosterModule } from './modules/roster/roster.module';
 import { DressingModule } from './modules/dressing/dressing.module';
 import { BillingModule } from './modules/billing/billing.module';
-import { PrepPayrollModule } from './modules/prepPayroll/prepPayroll.module';
 import { WorkshopModule } from './modules/workshop/workshop.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { ClientPortalModule } from './modules/clientPortal/clientPortal.module';
@@ -31,6 +32,7 @@ import { OpsModule } from './modules/ops/ops.module';
     OrgModule,
     CrmModule,
     HrModule,
+    RhSuiteModule,
     FleetModule,
     TransportModule,
     PlanningModule,
@@ -38,12 +40,12 @@ import { OpsModule } from './modules/ops/ops.module';
     RosterModule,
     DressingModule,
     BillingModule,
-    PrepPayrollModule,
     WorkshopModule,
     AnalyticsModule,
     ClientPortalModule,
     CommercialModule,
     DocumentsModule,
+    MessagingModule,
     PortalModule,
     DashboardModule,
   ],

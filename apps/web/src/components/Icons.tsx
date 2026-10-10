@@ -185,6 +185,14 @@ export function IconBroadcast(p: IconProps) {
     </svg>
   );
 }
+export function IconMail(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3 7 9 6 9-6" />
+    </svg>
+  );
+}
 export function IconSettings(p: IconProps) {
   return (
     <svg {...base(p)}>

@@ -30,7 +30,14 @@ export class AuthService {
   }
 
   private async issueSession(
-    user: { id: string; email: string; companyId: string; displayName: string; status: string },
+    user: {
+      id: string;
+      email: string;
+      companyId: string;
+      displayName: string;
+      status: string;
+      mustChangePassword?: boolean;
+    },
     meta?: { ip?: string; ua?: string },
   ) {
     const jti = randomBytes(16).toString('hex');
@@ -67,14 +74,62 @@ export class AuthService {
     });
     return {
       accessToken,
+      mustChangePassword: !!user.mustChangePassword,
       user: {
         id: user.id,
         email: user.email,
         displayName: user.displayName,
         companyId: user.companyId,
         status: user.status,
+        mustChangePassword: !!user.mustChangePassword,
       },
     };
+  }
+
+  async getAccountFlags(userId: string) {
+    return this.prisma.userAccount.findUnique({
+      where: { id: userId },
+      select: { mustChangePassword: true, status: true },
+    });
+  }
+
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    if (newPassword.length < 10) {
+      throw new BadRequestException('Mot de passe trop court (min 10)');
+    }
+    const user = await this.prisma.userAccount.findUnique({
+      where: { id: userId },
+    });
+    if (!user?.passwordHash) {
+      throw new BadRequestException('Compte sans mot de passe');
+    }
+    const ok = await argon2.verify(user.passwordHash, currentPassword);
+    if (!ok) throw new UnauthorizedException('Mot de passe actuel incorrect');
+    const passwordHash = await argon2.hash(newPassword, {
+      type: argon2.argon2id,
+    });
+    await this.prisma.userAccount.update({
+      where: { id: userId },
+      data: {
+        passwordHash,
+        mustChangePassword: false,
+        tempPasswordSetAt: null,
+      },
+    });
+    await this.prisma.accessAuditEvent.create({
+      data: {
+        companyId: user.companyId,
+        actorId: userId,
+        action: 'password_changed',
+        targetType: 'UserAccount',
+        targetId: userId,
+      },
+    });
+    return { ok: true };
   }
 
   async login(
@@ -188,7 +243,12 @@ export class AuthService {
     await this.prisma.$transaction([
       this.prisma.userAccount.update({
         where: { id: invitation.userId },
-        data: { passwordHash, status: 'active' },
+        data: {
+          passwordHash,
+          status: 'active',
+          mustChangePassword: false,
+          tempPasswordSetAt: null,
+        },
       }),
       this.prisma.accountInvitation.update({
         where: { id: invitation.id },
@@ -207,12 +267,22 @@ export class AuthService {
     return { ok: true, email: invitation.user.email };
   }
 
+  /** Mot de passe temporaire lisible (affiché une seule fois à la RH). */
+  generateTemporaryPassword() {
+    const a = randomBytes(2).toString('hex').toUpperCase();
+    const b = randomBytes(2).toString('hex').toUpperCase();
+    return `Carp-${a}-${b}`;
+  }
+
   async createAccessForEmployee(params: {
     companyId: string;
     employeeId: string;
     actorId: string;
     groupKeys?: string[];
     portalRole?: string;
+    /** invitation = lien d’activation ; temporary_password = MDP temporaire visible une fois */
+    mode?: 'invitation' | 'temporary_password';
+    email?: string;
   }) {
     const employee = await this.prisma.employee.findFirst({
       where: { id: params.employeeId, companyId: params.companyId },
@@ -222,7 +292,8 @@ export class AuthService {
     if (employee.accountLink) {
       throw new BadRequestException('Un compte est déjà lié à cette fiche');
     }
-    if (!employee.email) {
+    const email = (params.email || employee.email || '').toLowerCase().trim();
+    if (!email) {
       throw new BadRequestException('Email requis sur la fiche pour créer un accès');
     }
 
@@ -230,20 +301,39 @@ export class AuthService {
       where: {
         companyId_email: {
           companyId: params.companyId,
-          email: employee.email.toLowerCase(),
+          email,
         },
       },
     });
     if (existing) throw new BadRequestException('Email déjà utilisé pour un compte');
 
+    const mode = params.mode || 'temporary_password';
+    let temporaryPassword: string | undefined;
+    let passwordHash: string | undefined;
+    if (mode === 'temporary_password') {
+      temporaryPassword = this.generateTemporaryPassword();
+      passwordHash = await argon2.hash(temporaryPassword, { type: argon2.argon2id });
+    }
+
     const user = await this.prisma.userAccount.create({
       data: {
         companyId: params.companyId,
-        email: employee.email.toLowerCase(),
+        email,
         displayName: `${employee.firstName} ${employee.lastName}`,
-        status: 'invited',
+        status: mode === 'temporary_password' ? 'active' : 'invited',
+        passwordHash,
+        mustChangePassword: mode === 'temporary_password',
+        tempPasswordSetAt:
+          mode === 'temporary_password' ? new Date() : undefined,
       },
     });
+
+    if (!employee.email || employee.email.toLowerCase() !== email) {
+      await this.prisma.employee.update({
+        where: { id: employee.id },
+        data: { email },
+      });
+    }
 
     await this.prisma.employeeAccountLink.create({
       data: {
@@ -269,17 +359,23 @@ export class AuthService {
       }
     }
 
-    const rawToken = randomBytes(32).toString('hex');
-    const hours = Number(this.config.get('INVITATION_TTL_HOURS') || 72);
-    const invitation = await this.prisma.accountInvitation.create({
-      data: {
-        companyId: params.companyId,
-        userId: user.id,
-        tokenHash: this.hashToken(rawToken),
-        expiresAt: new Date(Date.now() + hours * 3600 * 1000),
-        createdById: params.actorId,
-      },
-    });
+    let invitationToken: string | undefined;
+    let expiresAt: Date | undefined;
+    if (mode === 'invitation') {
+      const rawToken = randomBytes(32).toString('hex');
+      const hours = Number(this.config.get('INVITATION_TTL_HOURS') || 72);
+      const invitation = await this.prisma.accountInvitation.create({
+        data: {
+          companyId: params.companyId,
+          userId: user.id,
+          tokenHash: this.hashToken(rawToken),
+          expiresAt: new Date(Date.now() + hours * 3600 * 1000),
+          createdById: params.actorId,
+        },
+      });
+      invitationToken = rawToken;
+      expiresAt = invitation.expiresAt;
+    }
 
     await this.prisma.accessAuditEvent.create({
       data: {
@@ -288,15 +384,73 @@ export class AuthService {
         action: 'access_created',
         targetType: 'UserAccount',
         targetId: user.id,
-        detailJson: JSON.stringify({ employeeId: employee.id, invitationId: invitation.id }),
+        detailJson: JSON.stringify({
+          employeeId: employee.id,
+          mode,
+        }),
       },
     });
 
     return {
-      user,
-      // Token returned only at creation time for demo/dev; never stored in clear
-      invitationToken: rawToken,
-      expiresAt: invitation.expiresAt,
+      user: {
+        id: user.id,
+        email: user.email,
+        status: user.status,
+        mustChangePassword: user.mustChangePassword,
+      },
+      mode,
+      invitationToken,
+      expiresAt,
+      /** Affiché une seule fois — jamais stocké en clair */
+      temporaryPassword,
+    };
+  }
+
+  /**
+   * Régénère un mot de passe temporaire (retourné en clair une seule fois).
+   */
+  async setTemporaryPassword(
+    userId: string,
+    actorId: string,
+    companyId: string,
+  ) {
+    const user = await this.prisma.userAccount.findFirst({
+      where: { id: userId, companyId },
+    });
+    if (!user) throw new BadRequestException('Utilisateur introuvable');
+    const temporaryPassword = this.generateTemporaryPassword();
+    const passwordHash = await argon2.hash(temporaryPassword, {
+      type: argon2.argon2id,
+    });
+    await this.prisma.userAccount.update({
+      where: { id: userId },
+      data: {
+        passwordHash,
+        status: 'active',
+        mustChangePassword: true,
+        tempPasswordSetAt: new Date(),
+      },
+    });
+    await this.prisma.userSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    await this.prisma.accessAuditEvent.create({
+      data: {
+        companyId,
+        actorId,
+        action: 'temporary_password_issued',
+        targetType: 'UserAccount',
+        targetId: userId,
+      },
+    });
+    return {
+      userId,
+      email: user.email,
+      temporaryPassword,
+      mustChangePassword: true,
+      message:
+        'Mot de passe temporaire généré — communiquez-le au salarié, il ne sera plus réaffichable.',
     };
   }
 

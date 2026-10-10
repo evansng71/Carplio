@@ -198,7 +198,7 @@ export const BLOCK_LIBRARY: Array<{
     type: 'html_slot',
     label: 'Tableau de lignes',
     hint: 'Lignes générées automatiquement',
-    kinds: ['invoice', 'planning'],
+    kinds: ['invoice', 'planning', 'payslip'],
     create: () => ({
       id: uid(),
       type: 'html_slot',
@@ -378,6 +378,67 @@ export function defaultLayoutFor(kind: string): LayoutDoc {
           id: uid(),
           type: 'footer_note',
           text: 'Édité le {{today}} — {{company.name}}',
+        },
+      ],
+    };
+  }
+  if (kind === 'payslip') {
+    return {
+      version: 1,
+      blocks: [
+        {
+          id: uid(),
+          type: 'company_header',
+          showTradeName: true,
+          showSiret: true,
+          showVat: false,
+        },
+        {
+          id: uid(),
+          type: 'document_title',
+          badgeLabel: 'BULLETIN DE PAIE',
+          numberKey: 'payslip.yearMonth',
+          dateLabel: 'Période',
+          dateKey: 'payslip.periodLabel',
+        },
+        {
+          id: uid(),
+          type: 'info_cards',
+          leftTitle: 'Salarié',
+          leftLines: [
+            { label: 'Nom', key: 'employee.fullName' },
+            { label: 'Matricule', key: 'employee.matricule' },
+            { label: 'Poste', key: 'employee.jobTitle' },
+            { label: 'Contrat', key: 'employee.contractType' },
+          ],
+          rightTitle: 'Heures',
+          rightLines: [
+            { label: 'Travaillées', key: 'payslip.workedHours' },
+            { label: 'HS', key: 'payslip.overtimeHours' },
+            { label: 'Nuit', key: 'payslip.nightHours' },
+            { label: 'Congés', key: 'payslip.leaveDays' },
+          ],
+        },
+        {
+          id: uid(),
+          type: 'html_slot',
+          key: 'payslip.linesHtml',
+          title: 'Rubriques',
+        },
+        {
+          id: uid(),
+          type: 'key_value_table',
+          rows: [
+            { label: 'Salaire de base', key: 'payslip.baseSalary' },
+            { label: 'Brut', key: 'payslip.grossAmount' },
+            { label: 'Charges salariales', key: 'payslip.employeeCharges' },
+            { label: 'Net à payer', key: 'payslip.netAmount' },
+          ],
+        },
+        {
+          id: uid(),
+          type: 'footer_note',
+          text: 'Bulletin {{payslip.yearMonth}} — {{company.name}} — {{today}}',
         },
       ],
     };
@@ -576,6 +637,8 @@ export function fieldGroupsFor(
       vehicle: 'Le véhicule',
       planning: 'Le planning',
       order: 'La commande',
+      payslip: 'Le bulletin',
+      employee: 'Le salarié',
       today: 'Dates',
     };
     const g = groupMap[root] || 'Autres';

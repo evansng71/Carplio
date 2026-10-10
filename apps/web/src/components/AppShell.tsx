@@ -4,11 +4,11 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { ComponentType, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/lib/auth';
+import { api } from '@/lib/api';
 import {
   IconAdmin,
   IconAudit,
   IconBroadcast,
-  IconBus,
   IconCalendar,
   IconChart,
   IconClipboard,
@@ -19,6 +19,7 @@ import {
   IconLink,
   IconLock,
   IconLogout,
+  IconMail,
   IconMap,
   IconBan,
   IconPortal,
@@ -31,6 +32,7 @@ import {
   IconUsers,
   IconWallet,
   IconWrench,
+  IconBus,
   Tone,
   TONE_CLASS,
 } from '@/components/Icons';
@@ -45,15 +47,23 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
-  { href: '/app', label: 'Cockpit', perm: 'dashboard:widget:list', icon: IconGauge, tone: 'blue' },
-  { href: '/app/employees', label: 'RH / Salariés', perm: 'hr:employee:list', icon: IconId, tone: 'violet' },
+  { href: '/app', label: 'Tableau de bord', perm: 'dashboard:widget:list', icon: IconGauge, tone: 'blue' },
   { href: '/app/transport', label: 'Plan transport', perm: 'courses:course:list', icon: IconMap, tone: 'cyan' },
-  { href: '/app/prep-payroll', label: 'Prépaye', perm: 'hr:prepPayroll:list', icon: IconWallet, tone: 'emerald' },
   { href: '/app/workshop', label: 'Atelier', perm: 'fleet:workshop:list', icon: IconWrench, tone: 'orange' },
   { href: '/app/quality', label: 'Qualité', perm: 'quality:incident:list', icon: IconShield, tone: 'rose' },
   { href: '/app/analytics', label: 'BI / Budgets', perm: 'dashboard:analytics:list', icon: IconChart, tone: 'blue' },
   { href: '/app/client-requests', label: 'Portail client', perm: 'quotes:quote:list', icon: IconPortal, tone: 'teal' },
   { href: '/app/portal-ops', label: 'Portail ops', perm: 'portal:publication:publish', icon: IconBroadcast, tone: 'violet' },
+];
+
+const HR_NAV: NavItem[] = [
+  { href: '/app/hr', label: 'Cockpit RH', perm: 'hr:employee:list', icon: IconGauge, tone: 'violet', exact: true },
+  { href: '/app/employees', label: 'Salariés', perm: 'hr:employee:list', icon: IconId, tone: 'violet' },
+  { href: '/app/hr/payroll', label: 'Paie & bulletins', perm: 'hr:payroll:list', icon: IconWallet, tone: 'emerald' },
+  { href: '/app/hr/bonuses', label: 'Primes & indemnités', perm: 'hr:payroll:manage', icon: IconWallet, tone: 'teal' },
+  { href: '/app/hr/leaves', label: 'Congés & absences', perm: 'hr:leave:list', icon: IconCalendar, tone: 'cyan' },
+  { href: '/app/hr/trainings', label: 'Formations / FCO', perm: 'hr:training:list', icon: IconClipboard, tone: 'amber' },
+  { href: '/app/hr/interviews', label: 'Entretiens', perm: 'hr:interview:list', icon: IconUsers, tone: 'orange' },
 ];
 
 const COMMERCIAL_NAV: NavItem[] = [
@@ -67,8 +77,9 @@ const OPS_NAV: NavItem[] = [
   { href: '/app/ops', label: 'Cockpit exploitation', perm: 'planning:assignment:list', icon: IconGauge, tone: 'violet' },
   { href: '/app/missions', label: 'Missions', perm: 'missions:mission:list', icon: IconRoute, tone: 'violet' },
   { href: '/app/planning', label: 'Planning', perm: 'planning:assignment:list', icon: IconCalendar, tone: 'blue' },
+  { href: '/app/portal-ops', label: 'Portail conducteurs', perm: 'portal:publication:publish', icon: IconBroadcast, tone: 'violet' },
   { href: '/app/vehicles', label: 'Véhicules', perm: 'fleet:vehicle:list', icon: IconBus, tone: 'teal' },
-  { href: '/app/drivers', label: 'Conducteurs', perm: 'drivers:driver:list', icon: IconSteering, tone: 'emerald' },
+  { href: '/app/drivers', label: 'Conducteurs (ops)', perm: 'drivers:driver:list', icon: IconSteering, tone: 'emerald' },
   { href: '/app/unavailabilities', label: 'Indisponibilités', perm: 'planning:assignment:list', icon: IconBan, tone: 'rose' },
   { href: '/app/rosters', label: 'Roulements', perm: 'services:service:list', icon: IconRepeat, tone: 'cyan' },
   { href: '/app/dressing', label: 'Habillage HLP', perm: 'planning:assignment:list', icon: IconLink, tone: 'slate' },
@@ -103,11 +114,18 @@ function isOpsPath(pathname: string) {
     pathname.startsWith('/app/ops') ||
     pathname.startsWith('/app/missions') ||
     pathname.startsWith('/app/planning') ||
+    pathname.startsWith('/app/portal-ops') ||
     pathname.startsWith('/app/vehicles') ||
     pathname.startsWith('/app/drivers') ||
     pathname.startsWith('/app/unavailabilities') ||
     pathname.startsWith('/app/rosters') ||
     pathname.startsWith('/app/dressing')
+  );
+}
+
+function isHrPath(pathname: string) {
+  return (
+    pathname.startsWith('/app/hr') || pathname.startsWith('/app/employees')
   );
 }
 
@@ -121,13 +139,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     pathname.startsWith('/app/admin') || pathname.startsWith('/app/security');
   const commercialOpenDefault = isCommercialPath(pathname);
   const opsOpenDefault = isOpsPath(pathname);
+  const hrOpenDefault = isHrPath(pathname);
   const [adminOpen, setAdminOpen] = useState(adminOpenDefault);
   const [commercialOpen, setCommercialOpen] = useState(commercialOpenDefault);
   const [opsOpen, setOpsOpen] = useState(opsOpenDefault);
+  const [hrOpen, setHrOpen] = useState(hrOpenDefault);
+  const [companyName, setCompanyName] = useState('Société');
 
   useEffect(() => {
     if (!loading && !me) router.replace('/login');
   }, [loading, me, router]);
+
+  useEffect(() => {
+    if (!me) return;
+    api<{ name?: string; tradeName?: string | null }>('/org/company')
+      .then((c) => {
+        setCompanyName(c.name || c.tradeName || 'Société');
+      })
+      .catch(() => setCompanyName('Société'));
+  }, [me]);
 
   useEffect(() => {
     if (adminOpenDefault) setAdminOpen(true);
@@ -141,6 +171,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (opsOpenDefault) setOpsOpen(true);
   }, [opsOpenDefault]);
 
+  useEffect(() => {
+    if (hrOpenDefault) setHrOpen(true);
+  }, [hrOpenDefault]);
+
   const items = useMemo(
     () => NAV.filter((n) => can(n.perm) || me?.isSuperAdmin),
     [can, me],
@@ -153,6 +187,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     () => OPS_NAV.filter((n) => can(n.perm) || me?.isSuperAdmin),
     [can, me],
   );
+  const hrItems = useMemo(
+    () => HR_NAV.filter((n) => can(n.perm) || me?.isSuperAdmin),
+    [can, me],
+  );
   const adminItems = useMemo(
     () => ADMIN_NAV.filter((n) => can(n.perm) || me?.isSuperAdmin),
     [can, me],
@@ -160,6 +198,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const showAdmin = adminItems.length > 0;
   const showCommercial = commercialItems.length > 0;
   const showOps = opsItems.length > 0;
+  const showHr = hrItems.length > 0;
 
   if (loading || !me) {
     return (
@@ -256,31 +295,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           collapsed ? 'w-[76px]' : 'w-64'
         }`}
       >
-        <div className="flex shrink-0 items-center justify-between px-3 py-4">
-          {!collapsed ? (
-            <div className="flex items-center gap-2.5 px-1">
-              <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-action/20 text-action-soft">
-                <IconBus size={18} className="text-[#7EC8F5]" />
-              </span>
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7EC8F5]">
-                  Carpilato
-                </div>
-                <div className="text-sm font-semibold">Horizon DEMO</div>
-              </div>
-            </div>
-          ) : (
-            <span className="mx-auto inline-flex h-9 w-9 items-center justify-center rounded-xl bg-action/20">
-              <IconBus size={18} className="text-[#7EC8F5]" />
-            </span>
-          )}
+        <div className="relative shrink-0 border-b border-white/10 px-3 pb-4 pt-5">
           <button
-            className="rounded-lg px-2 py-1 text-xs text-cream/70 hover:bg-white/10"
+            className="absolute right-2 top-2 z-10 rounded-lg px-2 py-1 text-xs text-cream/70 hover:bg-white/10"
             onClick={() => setCollapsed((v) => !v)}
             aria-label="Replier"
           >
             {collapsed ? '»' : '«'}
           </button>
+          {!collapsed ? (
+            <div className="flex flex-col items-center px-1 text-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/brand/carpilato-logo-cyan.png"
+                alt="Carpilato"
+                className="h-20 w-auto max-w-[95%] object-contain"
+              />
+              <div
+                className="mt-2.5 w-full truncate text-sm font-semibold leading-snug text-cream"
+                title={companyName}
+              >
+                {companyName}
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center pt-4">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/brand/carpilato-logo-cyan.png"
+                alt="Carpilato"
+                className="h-12 w-12 object-contain"
+              />
+            </div>
+          )}
         </div>
 
         <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
@@ -308,6 +355,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               'bg-[#6D28D9]/20 text-[#C4B5FD]',
               <IconRoute size={16} />,
               '/app/ops',
+            )}
+
+          {showHr &&
+            renderSection(
+              'Ressources humaines',
+              hrOpen,
+              setHrOpen,
+              hrOpenDefault,
+              hrItems,
+              'bg-[#7C3AED]/20 text-[#DDD6FE]',
+              <IconId size={16} />,
+              '/app/hr',
             )}
 
           {items.slice(1).map(renderNavLink)}
@@ -374,9 +433,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               }}
             />
           </div>
-          <div className="ml-auto flex items-center gap-2 text-xs">
-            <span className="badge-blue">Société DEMO</span>
-            <span className="badge-teal">Dépôt Lyon</span>
+          <div className="ml-auto flex items-center gap-3 text-xs">
+            {(can('messaging:thread:list') || me.isSuperAdmin) && (
+              <Link
+                href="/app/messaging"
+                title="Messagerie"
+                aria-label="Messagerie"
+                className={`relative inline-flex h-9 w-9 items-center justify-center rounded-xl border transition ${
+                  pathname.startsWith('/app/messaging')
+                    ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                    : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]/40 hover:bg-[var(--bg)] hover:text-[var(--ink)]'
+                }`}
+              >
+                <IconMail size={18} />
+              </Link>
+            )}
+            <span className="badge-blue max-w-[14rem] truncate" title={companyName}>
+              {companyName}
+            </span>
           </div>
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto px-6 py-6">{children}</main>

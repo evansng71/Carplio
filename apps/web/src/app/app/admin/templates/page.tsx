@@ -45,6 +45,7 @@ const KIND_ICONS: Record<string, string> = {
   planning: 'Planning',
   collective_ticket: 'Billets',
   order: 'Commandes',
+  payslip: 'Bulletins de paie',
 };
 
 export default function DocumentTemplatesPage() {

@@ -3,7 +3,8 @@ export type TemplateKind =
   | 'invoice'
   | 'planning'
   | 'collective_ticket'
-  | 'order';
+  | 'order'
+  | 'payslip';
 
 export type TemplateVariable = {
   key: string;
@@ -132,6 +133,45 @@ export const TEMPLATE_KINDS: KindMeta[] = [
       { key: 'customer.name', label: 'Nom du client' },
       { key: 'quote.number', label: 'Numéro du devis lié' },
       { key: 'today', label: 'Date du jour (impression)' },
+    ],
+  },
+  {
+    kind: 'payslip',
+    label: 'Bulletin de paie',
+    description:
+      'Fiche de paie salarié (Imprimer / PDF depuis Paie ou fiche salarié)',
+    variables: [
+      { key: 'company.name', label: 'Nom de la société' },
+      { key: 'company.tradeName', label: 'Enseigne' },
+      { key: 'company.siret', label: 'SIRET' },
+      { key: 'company.vatNumber', label: 'TVA' },
+      { key: 'company.address', label: 'Adresse société' },
+      { key: 'employee.matricule', label: 'Matricule' },
+      { key: 'employee.fullName', label: 'Nom complet' },
+      { key: 'employee.firstName', label: 'Prénom' },
+      { key: 'employee.lastName', label: 'Nom' },
+      { key: 'employee.jobTitle', label: 'Poste' },
+      { key: 'employee.contractType', label: 'Type de contrat' },
+      { key: 'employee.classification', label: 'Classification' },
+      { key: 'employee.ssnMasked', label: 'N° sécu (masqué)' },
+      { key: 'employee.address', label: 'Adresse salarié' },
+      { key: 'employee.depot', label: 'Dépôt' },
+      { key: 'payslip.yearMonth', label: 'Période YYYY-MM' },
+      { key: 'payslip.periodLabel', label: 'Période libellé' },
+      { key: 'payslip.status', label: 'Statut' },
+      { key: 'payslip.workedHours', label: 'Heures travaillées' },
+      { key: 'payslip.overtimeHours', label: 'Heures supp.' },
+      { key: 'payslip.nightHours', label: 'Heures de nuit' },
+      { key: 'payslip.leaveDays', label: 'Jours de congés' },
+      { key: 'payslip.baseSalary', label: 'Salaire de base' },
+      { key: 'payslip.grossAmount', label: 'Brut' },
+      { key: 'payslip.employeeCharges', label: 'Charges salariales' },
+      { key: 'payslip.employerCharges', label: 'Charges patronales' },
+      { key: 'payslip.netAmount', label: 'Net à payer' },
+      { key: 'payslip.employerCost', label: 'Coût employeur' },
+      { key: 'payslip.linesHtml', label: 'Tableau des rubriques' },
+      { key: 'payslip.notes', label: 'Notes' },
+      { key: 'today', label: 'Date du jour' },
     ],
   },
 ];
@@ -363,6 +403,76 @@ export const DEFAULT_TEMPLATES: Array<{
 </div>
 
 <div class="footer">{{company.name}} — document généré le {{today}}</div>
+`.trim(),
+  },
+  {
+    kind: 'payslip',
+    key: 'payslip_default',
+    name: 'Bulletin de paie standard',
+    description: 'Bulletin A4 avec rubriques, totaux et en-tête société',
+    stylesCss: `${BASE_CSS}
+  .payslip-meta td { border: none; padding: 2px 8px 2px 0; }
+  .net-box { background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 12px 16px; text-align: right; margin-top: 12px; }
+  .net-box strong { font-size: 16pt; color: #166534; }
+`,
+    bodyHtml: `
+<header class="row">
+  <div>
+    <h1>{{company.tradeName|fallback:company.name}}</h1>
+    <div class="muted">{{company.name}} · SIRET {{company.siret}}</div>
+    <div class="muted">{{company.address}}</div>
+  </div>
+  <div style="text-align:right">
+    <div class="badge">BULLETIN DE PAIE</div>
+    <div style="margin-top:8px"><strong>{{payslip.periodLabel}}</strong></div>
+    <div class="muted">Édité le {{today}}</div>
+  </div>
+</header>
+
+<div class="row" style="margin-top:18px">
+  <div class="box">
+    <div class="muted">Salarié</div>
+    <strong>{{employee.fullName}}</strong><br/>
+    Matricule {{employee.matricule}}<br/>
+    {{employee.jobTitle}} · {{employee.contractType}}<br/>
+    {{employee.classification}}<br/>
+    {{employee.address}}
+  </div>
+  <div class="box">
+    <div class="muted">Période &amp; heures</div>
+    <table class="payslip-meta">
+      <tr><td>Dépôt</td><td><strong>{{employee.depot}}</strong></td></tr>
+      <tr><td>Heures</td><td><strong>{{payslip.workedHours}}</strong></td></tr>
+      <tr><td>HS</td><td>{{payslip.overtimeHours}}</td></tr>
+      <tr><td>Nuit</td><td>{{payslip.nightHours}}</td></tr>
+      <tr><td>Congés (j)</td><td>{{payslip.leaveDays}}</td></tr>
+      <tr><td>N° sécu</td><td>{{employee.ssnMasked}}</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>Rubriques</h2>
+{{payslip.linesHtml}}
+
+<div class="row" style="margin-top:16px">
+  <div class="box">
+    <div>Salaire de base : <strong>{{payslip.baseSalary}}</strong></div>
+    <div>Brut : <strong>{{payslip.grossAmount}}</strong></div>
+    <div>Charges salariales : {{payslip.employeeCharges}}</div>
+    <div class="muted">Charges patronales : {{payslip.employerCharges}}</div>
+    <div class="muted">Coût employeur : {{payslip.employerCost}}</div>
+  </div>
+  <div class="net-box" style="flex:1">
+    <div class="muted">Net à payer</div>
+    <strong>{{payslip.netAmount}}</strong>
+  </div>
+</div>
+
+<p class="muted" style="margin-top:12px">{{payslip.notes}}</p>
+<div class="footer">
+  Bulletin {{payslip.yearMonth}} — {{company.name}}. Document généré le {{today}}.
+  Conservez ce bulletin. Modèle personnalisable dans Administration → Modèles.
+</div>
 `.trim(),
   },
 ];
