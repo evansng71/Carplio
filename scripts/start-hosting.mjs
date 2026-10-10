@@ -1,15 +1,19 @@
 /**
- * Infomaniak: parent process must stay alive; public PORT = Next.js.
- * API listens on internal API_PORT (default 4000); Next rewrites /api → API.
+ * Infomaniak-safe start:
+ * - Public process listens ONLY on process.env.PORT (required by host)
+ * - API + Next bind on 127.0.0.1 internal ports
+ * - Parent reverse-proxies /api → API, everything else → Next
  */
+import http from 'node:http';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const webPort = String(process.env.PORT || 3000);
-const apiPort = String(process.env.API_PORT || 4000);
+const publicPort = Number(process.env.PORT || 3000);
+const apiPort = Number(process.env.API_INTERNAL_PORT || 4010);
+const webPort = Number(process.env.WEB_INTERNAL_PORT || 4011);
 
 function resolveNextBin() {
   const candidates = [
@@ -22,47 +26,107 @@ function resolveNextBin() {
   throw new Error('next binary not found — run build:hosting first');
 }
 
-function run(label, command, args, extraEnv = {}) {
-  const child = spawn(command, args, {
+function run(label, args, extraEnv = {}) {
+  const child = spawn(process.execPath, args, {
     cwd: root,
     env: { ...process.env, ...extraEnv },
-    stdio: 'inherit',
-    shell: false,
+    stdio: ['ignore', 'inherit', 'inherit'],
   });
   child.on('error', (err) => {
     console.error(`[${label}] spawn error`, err);
     process.exit(1);
   });
   child.on('exit', (code, signal) => {
-    console.error(`[${label}] stopped code=${code} signal=${signal}`);
+    console.error(`[${label}] exited code=${code} signal=${signal}`);
     process.exit(code ?? 1);
   });
   return child;
 }
 
-console.log(`[hosting] cwd=${root}`);
-console.log(`[hosting] API internal :${apiPort} | Web public :${webPort}`);
-
-if (!fs.existsSync(path.join(root, 'apps/api/dist/main.js'))) {
-  console.error('[hosting] missing apps/api/dist/main.js — rebuild first');
-  process.exit(1);
+function wait(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-run('api', process.execPath, ['apps/api/dist/main.js'], {
-  PORT: apiPort,
-  API_PORT: apiPort,
-});
+async function waitHttp(url, tries = 40) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(url, { method: 'GET' });
+      if (res.status > 0) return;
+    } catch {
+      /* retry */
+    }
+    await wait(500);
+  }
+  throw new Error(`timeout waiting for ${url}`);
+}
 
-setTimeout(() => {
-  const nextBin = resolveNextBin();
-  console.log(`[hosting] next bin=${nextBin}`);
-  run('web', process.execPath, [nextBin, 'start', '-p', webPort, '-H', '0.0.0.0'], {
-    PORT: webPort,
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || '/api',
-    API_PROXY_TARGET:
-      process.env.API_PROXY_TARGET || `http://127.0.0.1:${apiPort}`,
+function proxy(req, res, targetHost, targetPort) {
+  const headers = { ...req.headers, host: `${targetHost}:${targetPort}` };
+  const opts = {
+    hostname: targetHost,
+    port: targetPort,
+    path: req.url,
+    method: req.method,
+    headers,
+  };
+  const p = http.request(opts, (up) => {
+    res.writeHead(up.statusCode || 502, up.headers);
+    up.pipe(res);
   });
-}, 2000);
+  p.on('error', (err) => {
+    console.error('[proxy]', err.message);
+    if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain' });
+    res.end('Bad gateway');
+  });
+  req.pipe(p);
+}
 
-// Keep parent event-loop alive (Infomaniak tracks this process)
-setInterval(() => {}, 60_000);
+async function main() {
+  console.log(`[hosting] public :${publicPort} | api :${apiPort} | web :${webPort}`);
+
+  const apiMain = path.join(root, 'apps/api/dist/main.js');
+  if (!fs.existsSync(apiMain)) {
+    throw new Error('missing apps/api/dist/main.js — rebuild');
+  }
+
+  run('api', [apiMain], {
+    PORT: String(apiPort),
+    API_PORT: String(apiPort),
+    HOST: '127.0.0.1',
+  });
+
+  const nextBin = resolveNextBin();
+  run('web', [nextBin, 'start', '-p', String(webPort), '-H', '127.0.0.1'], {
+    PORT: String(webPort),
+    NEXT_PUBLIC_API_URL: '/api',
+  });
+
+  // Nest health: any response means listen OK (401 on /api/auth/me is fine)
+  await waitHttp(`http://127.0.0.1:${apiPort}/api/auth/me`).catch(() =>
+    waitHttp(`http://127.0.0.1:${apiPort}/api`),
+  );
+  await waitHttp(`http://127.0.0.1:${webPort}/login`);
+
+  const server = http.createServer((req, res) => {
+    const url = req.url || '/';
+    if (url === '/__hosting_health') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok');
+      return;
+    }
+    if (url.startsWith('/api/') || url === '/api') {
+      proxy(req, res, '127.0.0.1', apiPort);
+      return;
+    }
+    proxy(req, res, '127.0.0.1', webPort);
+  });
+
+  server.listen(publicPort, '0.0.0.0', () => {
+    console.log(`[hosting] listening on 0.0.0.0:${publicPort}`);
+  });
+}
+
+main().catch((err) => {
+  console.error('[hosting] fatal', err);
+  process.exit(1);
+});
