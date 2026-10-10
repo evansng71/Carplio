@@ -1,5 +1,6 @@
 /**
  * Single-flight Infomaniak build (prevents overlapping next build / git pull).
+ * Clears dead locks (previous Start/Build killed mid-way).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const lockPath = path.join(root, '.hosting-build.lock');
 const maxWaitMs = 25 * 60 * 1000;
-const staleMs = 30 * 60 * 1000;
+const staleMs = 3 * 60 * 1000;
 
 function sleep(ms) {
   spawnSync(process.execPath, ['-e', `setTimeout(() => {}, ${ms})`], {
@@ -17,23 +18,56 @@ function sleep(ms) {
   });
 }
 
-function isLocked() {
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearLock(reason) {
+  console.warn(`[hosting] removing build lock (${reason})`);
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    /* ignore */
+  }
+}
+
+function isLockedByLiveProcess() {
   if (!fs.existsSync(lockPath)) return false;
   const age = Date.now() - fs.statSync(lockPath).mtimeMs;
   if (age > staleMs) {
-    console.warn('[hosting] removing stale build lock');
-    try {
-      fs.unlinkSync(lockPath);
-    } catch {
-      /* ignore */
-    }
+    clearLock(`stale ${Math.round(age / 1000)}s`);
     return false;
   }
-  return true;
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf8').trim();
+    const pid = Number(String(raw).split(/\s+/)[0]);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      clearLock('invalid pid');
+      return false;
+    }
+    if (pid === process.pid) return false;
+    if (!pidAlive(pid)) {
+      clearLock(`dead pid ${pid}`);
+      return false;
+    }
+    return true;
+  } catch {
+    clearLock('unreadable');
+    return false;
+  }
+}
+
+if (process.env.HOSTING_FORCE_BUILD === '1') {
+  clearLock('HOSTING_FORCE_BUILD=1');
 }
 
 const started = Date.now();
-while (isLocked()) {
+while (isLockedByLiveProcess()) {
   if (Date.now() - started > maxWaitMs) {
     console.error('[hosting] timed out waiting for another build');
     process.exit(1);
@@ -78,13 +112,7 @@ const steps = [
   ['npx', ['--yes', 'pnpm@9.15.0', '--filter', '@autocar/api', 'build']],
   [
     'npx',
-    [
-      '--yes',
-      'pnpm@9.15.0',
-      '--filter',
-      '@autocar/web',
-      'build',
-    ],
+    ['--yes', 'pnpm@9.15.0', '--filter', '@autocar/web', 'build'],
   ],
 ];
 
