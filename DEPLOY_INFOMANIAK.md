@@ -186,11 +186,15 @@ Si une seule app Node écoute sur `PORT` avec reverse-proxy interne :
 
 | Champ Infomaniak | Commande |
 |---|---|
-| **Build** | *(vide / décoché)* ou `npm run build:hosting` |
+| **Build** | `npm run build:hosting` |
 | **Start** | `npm run start:hosting` |
 
-Le Start écoute tout de suite sur `PORT`, puis compile en arrière-plan si `.next` manque (page « Déploiement en cours… »).  
-**Ne jamais** mettre `build:hosting && start:hosting` dans Start.
+**Important** : Infomaniak redémarre le Start ~toutes les 45 s. Il ne faut **pas** compiler dans Start.  
+Procédure première mise en ligne :
+
+1. **Arrêter** le site  
+2. Lancer **uniquement le Build** (`npm run build:hosting`) et attendre la fin complète  
+3. Puis **Start** (`npm run start:hosting`)
 
 ---
 

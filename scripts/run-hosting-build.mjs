@@ -92,6 +92,8 @@ const env = {
   ...process.env,
   NEXT_PUBLIC_API_URL: '/api',
   API_PROXY_TARGET: 'http://127.0.0.1:4000',
+  NEXT_TELEMETRY_DISABLED: '1',
+  NODE_OPTIONS: process.env.NODE_OPTIONS || '--max-old-space-size=1536',
 };
 
 let failed = 0;
