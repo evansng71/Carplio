@@ -186,11 +186,11 @@ Si une seule app Node écoute sur `PORT` avec reverse-proxy interne :
 
 | Champ Infomaniak | Commande |
 |---|---|
-| **Build** | `npm run build:hosting` |
+| **Build** | `git pull --ff-only origin main && npm run build:hosting` |
 | **Start** | `npm run start:hosting` |
 
-Sans l’étape Build, le start échoue avec `missing apps/web/.next`.  
-`start:hosting` tente un build de secours si les artefacts manquent (plus lent au 1er démarrage).
+Important : un simple **Redémarrer** ne met pas à jour le code. Il faut lancer le **Build** (qui fait `git pull` + compilation).  
+Sans `.next`, le start échoue. Les logs Start qui montrent encore `run Build first` = ancien code non tiré depuis GitHub.
 
 ---
 
