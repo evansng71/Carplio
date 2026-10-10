@@ -5,7 +5,7 @@
  * - Parent reverse-proxies /api → API, everything else → Next
  */
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,29 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const publicPort = Number(process.env.PORT || 3000);
 const apiPort = Number(process.env.API_INTERNAL_PORT || 4010);
 const webPort = Number(process.env.WEB_INTERNAL_PORT || 4011);
+const HOSTING_START_VERSION = '2026-04-10-autobuild';
+
+function ensureBuildArtifacts(apiMain, nextBuildId) {
+  if (fs.existsSync(apiMain) && fs.existsSync(nextBuildId)) return;
+  console.log(
+    '[hosting] missing .next/dist — running npm run build:hosting (first boot)…',
+  );
+  const r = spawnSync('npm', ['run', 'build:hosting'], {
+    cwd: root,
+    env: process.env,
+    stdio: 'inherit',
+  });
+  if (r.status !== 0) {
+    throw new Error(
+      `build:hosting failed (exit ${r.status ?? 1}) — check Infomaniak Build logs`,
+    );
+  }
+  if (!fs.existsSync(apiMain) || !fs.existsSync(nextBuildId)) {
+    throw new Error(
+      'build:hosting finished but apps/web/.next or apps/api/dist still missing',
+    );
+  }
+}
 
 function resolveNextBin() {
   const candidates = [
@@ -82,21 +105,14 @@ function proxy(req, res, targetHost, targetPort) {
 }
 
 async function main() {
-  console.log(`[hosting] public :${publicPort} | api :${apiPort} | web :${webPort}`);
+  console.log(
+    `[hosting] ${HOSTING_START_VERSION} | public :${publicPort} | api :${apiPort} | web :${webPort}`,
+  );
 
   const apiMain = path.join(root, 'apps/api/dist/main.js');
   const webDir = path.join(root, 'apps/web');
   const nextBuildId = path.join(webDir, '.next/BUILD_ID');
-  if (!fs.existsSync(apiMain)) {
-    throw new Error(
-      'missing apps/api/dist/main.js — set Infomaniak Build to: npm run build:hosting',
-    );
-  }
-  if (!fs.existsSync(nextBuildId)) {
-    throw new Error(
-      'missing apps/web/.next — set Infomaniak Build to: npm run build:hosting',
-    );
-  }
+  ensureBuildArtifacts(apiMain, nextBuildId);
 
   run('api', [apiMain], {
     PORT: String(apiPort),
