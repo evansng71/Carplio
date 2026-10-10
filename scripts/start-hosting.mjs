@@ -1,6 +1,6 @@
 /**
- * Infomaniak / PaaS: one public PORT for Next.js, API on internal 4000.
- * Next rewrites /api → http://127.0.0.1:4000
+ * Infomaniak: parent process must stay alive; public PORT = Next.js.
+ * API listens on internal API_PORT (default 4000); Next rewrites /api → API.
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -27,7 +27,11 @@ function run(label, command, args, extraEnv = {}) {
     cwd: root,
     env: { ...process.env, ...extraEnv },
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: false,
+  });
+  child.on('error', (err) => {
+    console.error(`[${label}] spawn error`, err);
+    process.exit(1);
   });
   child.on('exit', (code, signal) => {
     console.error(`[${label}] stopped code=${code} signal=${signal}`);
@@ -36,19 +40,29 @@ function run(label, command, args, extraEnv = {}) {
   return child;
 }
 
-console.log(`[hosting] API :${apiPort} | Web :${webPort}`);
+console.log(`[hosting] cwd=${root}`);
+console.log(`[hosting] API internal :${apiPort} | Web public :${webPort}`);
 
-run('api', 'node', ['apps/api/dist/main.js'], {
+if (!fs.existsSync(path.join(root, 'apps/api/dist/main.js'))) {
+  console.error('[hosting] missing apps/api/dist/main.js — rebuild first');
+  process.exit(1);
+}
+
+run('api', process.execPath, ['apps/api/dist/main.js'], {
   PORT: apiPort,
   API_PORT: apiPort,
 });
 
-// Small delay so API binds before first proxied requests
 setTimeout(() => {
-  run('web', 'node', [resolveNextBin(), 'start', '-p', webPort, '-H', '0.0.0.0'], {
+  const nextBin = resolveNextBin();
+  console.log(`[hosting] next bin=${nextBin}`);
+  run('web', process.execPath, [nextBin, 'start', '-p', webPort, '-H', '0.0.0.0'], {
     PORT: webPort,
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || '/api',
     API_PROXY_TARGET:
       process.env.API_PROXY_TARGET || `http://127.0.0.1:${apiPort}`,
   });
-}, 1500);
+}, 2000);
+
+// Keep parent event-loop alive (Infomaniak tracks this process)
+setInterval(() => {}, 60_000);
