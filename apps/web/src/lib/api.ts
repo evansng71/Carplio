@@ -43,3 +43,29 @@ export function setToken(token: string | null) {
   if (token) localStorage.setItem('access_token', token);
   else localStorage.removeItem('access_token');
 }
+
+/** Fetch HTML (print templates) with auth and open in a new window. */
+export async function openPrintHtml(path: string) {
+  const token =
+    typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const body = await res.json();
+      message = body.message || message;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(message || 'Impression impossible');
+  }
+  const html = await res.text();
+  const w = window.open('', '_blank');
+  if (!w) throw new Error('Autorisez les pop-ups pour imprimer');
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}

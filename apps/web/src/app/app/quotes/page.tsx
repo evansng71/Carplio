@@ -1,178 +1,216 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { IconFile, IconPlus, IconTile } from '@/components/Icons';
+import {
+  CommercialFilters,
+  compareBy,
+  matchSearch,
+} from '@/components/CommercialFilters';
+import {
+  formatDateFr,
+  formatMoney,
+  QuoteDetail,
+  QUOTE_STATUS_LABELS,
+} from '@/lib/quote';
+import { SERVICE_TYPES } from '@/lib/commercial';
 
-type Customer = { id: string; name: string };
-type Quote = {
-  id: string;
-  number: string;
-  title: string;
-  status: string;
-  amountTtc: number;
-  availabilityNote?: string;
-  availabilityConfidence?: string;
-  customer: Customer;
-};
+function statusTone(status: string) {
+  if (status === 'draft') return 'bg-slate-100 text-slate-700';
+  if (status === 'sent') return 'bg-sky-100 text-sky-800';
+  if (status === 'accepted' || status === 'planning')
+    return 'bg-emerald-100 text-emerald-800';
+  if (status === 'invoicing') return 'bg-amber-100 text-amber-900';
+  if (status === 'refused' || status === 'trashed')
+    return 'bg-rose-100 text-rose-800';
+  return 'bg-slate-100 text-slate-700';
+}
 
 export default function QuotesPage() {
-  const [quotes, setQuotes] = useState<Quote[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [form, setForm] = useState({
-    customerId: '',
-    title: '',
-    origin: '',
-    destination: '',
-    departureAt: '',
-    passengers: 40,
-    amountHt: 450,
-    caseType: 'simple',
-  });
+  const [quotes, setQuotes] = useState<QuoteDetail[]>([]);
+  const [err, setErr] = useState('');
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [serviceType, setServiceType] = useState('');
+  const [sort, setSort] = useState('date_desc');
 
-  const load = () => {
-    api<Quote[]>('/quotes').then(setQuotes);
-    api<Customer[]>('/customers').then((rows) => {
-      setCustomers(rows);
-      if (!form.customerId && rows[0]) {
-        setForm((f) => ({ ...f, customerId: rows[0].id }));
-      }
-    });
-  };
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    api<QuoteDetail[]>('/quotes')
+      .then(setQuotes)
+      .catch((e) => setErr(e.message));
   }, []);
 
-  async function create(e: FormEvent) {
-    e.preventDefault();
-    await api('/quotes', { method: 'POST', body: JSON.stringify(form) });
-    load();
-  }
-
-  async function accept(id: string) {
-    await api(`/quotes/${id}/accept`, { method: 'POST', body: '{}' });
-    load();
-  }
+  const filtered = useMemo(() => {
+    let rows = quotes.filter((q) => {
+      if (status && q.status !== status) return false;
+      if (serviceType && q.serviceType !== serviceType) return false;
+      return matchSearch(
+        [
+          q.number,
+          q.title,
+          q.customer?.name,
+          q.origin,
+          q.destination,
+          q.salesperson?.displayName,
+          q.customerPoNumber,
+          q.serviceType,
+          QUOTE_STATUS_LABELS[q.status],
+        ],
+        search,
+      );
+    });
+    const [key, dir] = sort.split('_') as [string, 'asc' | 'desc'];
+    rows = [...rows].sort((a, b) => {
+      if (key === 'date')
+        return compareBy(a.departureAt || a.createdAt, b.departureAt || b.createdAt, dir);
+      if (key === 'amount')
+        return compareBy(
+          a.proposedPriceHt || a.amountHt,
+          b.proposedPriceHt || b.amountHt,
+          dir,
+        );
+      if (key === 'client')
+        return compareBy(a.customer?.name, b.customer?.name, dir);
+      if (key === 'number') return compareBy(a.number, b.number, dir);
+      return 0;
+    });
+    return rows;
+  }, [quotes, search, status, serviceType, sort]);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Devis</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Estimation de disponibilité théorique avant envoi — pas de réservation ferme.
-        </p>
-      </div>
-      <form onSubmit={create} className="card grid gap-3 p-4 md:grid-cols-3">
-        <div>
-          <label className="label">Client</label>
-          <select
-            className="input"
-            value={form.customerId}
-            onChange={(e) => setForm({ ...form, customerId: e.target.value })}
-          >
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="label">Titre</label>
-          <input
-            className="input"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            required
-          />
-        </div>
-        <div>
-          <label className="label">Type dossier</label>
-          <select
-            className="input"
-            value={form.caseType}
-            onChange={(e) => setForm({ ...form, caseType: e.target.value })}
-          >
-            <option value="simple">Simple</option>
-            <option value="transfer">Transfert A/R</option>
-            <option value="repetitive">Répétitif</option>
-            <option value="complex">Complexe</option>
-          </select>
-        </div>
-        <div>
-          <label className="label">Origine</label>
-          <input
-            className="input"
-            value={form.origin}
-            onChange={(e) => setForm({ ...form, origin: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Destination</label>
-          <input
-            className="input"
-            value={form.destination}
-            onChange={(e) => setForm({ ...form, destination: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Départ</label>
-          <input
-            className="input"
-            type="datetime-local"
-            value={form.departureAt}
-            onChange={(e) => setForm({ ...form, departureAt: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Voyageurs</label>
-          <input
-            className="input"
-            type="number"
-            value={form.passengers}
-            onChange={(e) =>
-              setForm({ ...form, passengers: Number(e.target.value) })
-            }
-          />
-        </div>
-        <div>
-          <label className="label">Montant HT</label>
-          <input
-            className="input"
-            type="number"
-            value={form.amountHt}
-            onChange={(e) =>
-              setForm({ ...form, amountHt: Number(e.target.value) })
-            }
-          />
-        </div>
-        <div className="flex items-end">
-          <button className="btn-primary w-full">Créer devis</button>
-        </div>
-      </form>
-      <div className="space-y-3">
-        {quotes.map((q) => (
-          <div key={q.id} className="card flex flex-wrap items-start justify-between gap-3 p-4">
-            <div>
-              <div className="font-semibold">
-                {q.number} — {q.title}
-              </div>
-              <div className="text-sm text-[var(--muted)]">
-                {q.customer.name} · {q.amountTtc.toFixed(2)} € TTC · {q.status}
-              </div>
-              {q.availabilityNote && (
-                <div className="mt-1 text-xs text-action">
-                  Dispo ({q.availabilityConfidence}): {q.availabilityNote}
-                </div>
-              )}
-            </div>
-            {q.status !== 'accepted' && (
-              <button className="btn-primary" onClick={() => accept(q.id)}>
-                Accepter → commande
-              </button>
-            )}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <IconTile tone="blue">
+            <IconFile />
+          </IconTile>
+          <div>
+            <p className="page-kicker">Module commercial</p>
+            <h1 className="text-2xl font-bold">Devis</h1>
+            <p className="text-sm text-[var(--muted)]">
+              Création, proposition et suivi commercial des devis.
+            </p>
           </div>
-        ))}
+        </div>
+        <Link
+          href="/app/quotes/new"
+          className="btn-primary inline-flex items-center gap-2"
+        >
+          <IconPlus size={16} />
+          Nouveau devis
+        </Link>
+      </div>
+
+      {err && (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+          {err}
+        </div>
+      )}
+
+      <CommercialFilters
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="N°, client, trajet, BC, commercial…"
+        filters={[
+          {
+            key: 'status',
+            label: 'Statut',
+            value: status,
+            onChange: setStatus,
+            options: [
+              { value: '', label: 'Tous' },
+              ...Object.entries(QUOTE_STATUS_LABELS).map(([value, label]) => ({
+                value,
+                label,
+              })),
+            ],
+          },
+          {
+            key: 'serviceType',
+            label: 'Prestation',
+            value: serviceType,
+            onChange: setServiceType,
+            options: [
+              { value: '', label: 'Toutes' },
+              ...SERVICE_TYPES.map((s) => ({
+                value: s.value,
+                label: s.label,
+              })),
+            ],
+          },
+        ]}
+        sort={sort}
+        onSort={setSort}
+        sortOptions={[
+          { value: 'date_desc', label: 'Départ / date ↓' },
+          { value: 'date_asc', label: 'Départ / date ↑' },
+          { value: 'amount_desc', label: 'Montant ↓' },
+          { value: 'amount_asc', label: 'Montant ↑' },
+          { value: 'client_asc', label: 'Client A→Z' },
+          { value: 'number_asc', label: 'N°' },
+        ]}
+        resultCount={filtered.length}
+        resultLabel="devis"
+      />
+
+      <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-white">
+        <table className="w-full text-left text-sm">
+          <thead className="border-b border-[var(--border)] bg-[var(--surface-2)] text-xs uppercase tracking-wide text-[var(--muted)]">
+            <tr>
+              <th className="px-4 py-3 font-medium">N°</th>
+              <th className="px-4 py-3 font-medium">Client</th>
+              <th className="px-4 py-3 font-medium">Trajet</th>
+              <th className="px-4 py-3 font-medium">Départ</th>
+              <th className="px-4 py-3 font-medium">Montant</th>
+              <th className="px-4 py-3 font-medium">Statut</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  className="px-4 py-10 text-center text-[var(--muted)]"
+                >
+                  Aucun devis pour ces critères.
+                </td>
+              </tr>
+            )}
+            {filtered.map((q) => (
+              <tr
+                key={q.id}
+                className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--surface-2)]/60"
+              >
+                <td className="px-4 py-3">
+                  <Link
+                    href={`/app/quotes/${q.id}`}
+                    className="font-semibold text-action hover:underline"
+                  >
+                    {q.number}
+                  </Link>
+                </td>
+                <td className="px-4 py-3">{q.customer?.name}</td>
+                <td className="px-4 py-3 text-[var(--muted)]">
+                  {[q.origin, q.destination].filter(Boolean).join(' → ') ||
+                    q.title}
+                </td>
+                <td className="px-4 py-3">{formatDateFr(q.departureAt)}</td>
+                <td className="px-4 py-3 font-medium">
+                  {formatMoney(q.proposedPriceHt || q.amountHt)} HT
+                </td>
+                <td className="px-4 py-3">
+                  <span
+                    className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${statusTone(q.status)}`}
+                  >
+                    {QUOTE_STATUS_LABELS[q.status] || q.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

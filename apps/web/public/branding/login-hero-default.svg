@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0%" stop-color="#7EB6D9"/>
+      <stop offset="45%" stop-color="#C5D9E8"/>
+      <stop offset="100%" stop-color="#E8EEF2"/>
+    </linearGradient>
+    <linearGradient id="mtn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5A7A8F"/>
+      <stop offset="100%" stop-color="#3D5566"/>
+    </linearGradient>
+    <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4A5560"/>
+      <stop offset="100%" stop-color="#2F3840"/>
+    </linearGradient>
+    <linearGradient id="bus" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F4F7FA"/>
+      <stop offset="100%" stop-color="#D5DEE8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#sky)"/>
+  <ellipse cx="1180" cy="180" rx="90" ry="90" fill="#F7F1D8" opacity="0.85"/>
+  <path d="M0 520 L220 340 L380 480 L560 280 L760 460 L980 300 L1200 470 L1400 320 L1600 500 L1600 1000 L0 1000 Z" fill="url(#mtn)" opacity="0.55"/>
+  <path d="M0 620 L180 480 L340 580 L520 420 L720 560 L920 450 L1120 580 L1320 470 L1600 590 L1600 1000 L0 1000 Z" fill="#6B8A9C" opacity="0.45"/>
+  <ellipse cx="900" cy="640" rx="520" ry="70" fill="#8FB4C8" opacity="0.55"/>
+  <path d="M0 720 C400 680 700 760 1000 720 C1200 700 1400 740 1600 710 L1600 1000 L0 1000 Z" fill="#7A9A6A" opacity="0.5"/>
+  <path d="M-40 860 C300 780 600 900 900 820 C1150 770 1350 860 1640 800 L1640 1000 L-40 1000 Z" fill="url(#road)"/>
+  <path d="M0 900 C350 840 650 930 950 870 C1200 830 1400 900 1600 860" fill="none" stroke="#E8C84A" stroke-width="6" stroke-dasharray="28 22" opacity="0.7"/>
+  <!-- Coach -->
+  <g transform="translate(620 690)">
+    <rect x="0" y="20" width="340" height="110" rx="18" fill="url(#bus)"/>
+    <rect x="0" y="20" width="340" height="28" rx="14" fill="#1B6CA8"/>
+    <rect x="18" y="56" width="52" height="36" rx="4" fill="#9EC4E0"/>
+    <rect x="80" y="56" width="52" height="36" rx="4" fill="#9EC4E0"/>
+    <rect x="142" y="56" width="52" height="36" rx="4" fill="#9EC4E0"/>
+    <rect x="204" y="56" width="52" height="36" rx="4" fill="#9EC4E0"/>
+    <rect x="266" y="56" width="52" height="36" rx="4" fill="#7AA9D0"/>
+    <circle cx="70" cy="132" r="22" fill="#2A3340"/>
+    <circle cx="70" cy="132" r="10" fill="#8A93A0"/>
+    <circle cx="280" cy="132" r="22" fill="#2A3340"/>
+    <circle cx="280" cy="132" r="10" fill="#8A93A0"/>
+  </g>
+</svg>

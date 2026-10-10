@@ -20,6 +20,7 @@ import { PrepPayrollModule } from './modules/prepPayroll/prepPayroll.module';
 import { WorkshopModule } from './modules/workshop/workshop.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { ClientPortalModule } from './modules/clientPortal/clientPortal.module';
+import { OpsModule } from './modules/ops/ops.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { ClientPortalModule } from './modules/clientPortal/clientPortal.module';
     FleetModule,
     TransportModule,
     PlanningModule,
+    OpsModule,
     RosterModule,
     DressingModule,
     BillingModule,

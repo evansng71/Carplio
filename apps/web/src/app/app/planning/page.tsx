@@ -1,78 +1,340 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { api } from '@/lib/api';
 import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { api, openPrintHtml } from '@/lib/api';
 
 type Mode = 'day' | 'week' | 'fortnight';
+
+type MissionLite = {
+  id: string;
+  number: string;
+  title: string;
+  status: string;
+  startsAt: string;
+  endsAt: string;
+  origin?: string | null;
+  destination?: string | null;
+  originAddress?: string | null;
+  destinationAddress?: string | null;
+  passengers: number;
+  minSeats?: number | null;
+  requiresPmr?: boolean;
+  estimatedKm?: number | null;
+  stopsJson?: string | null;
+  opsNotes?: string | null;
+  clientBrief?: string | null;
+  roadSheetNotes?: string | null;
+  order?: {
+    number?: string;
+    customer?: { name: string };
+    quote?: {
+      number?: string;
+      serviceType?: string;
+      vehicleCategory?: { name: string } | null;
+    } | null;
+  } | null;
+};
+
+type Assignment = {
+  id: string;
+  driverId?: string | null;
+  vehicleId?: string | null;
+  startsAt: string;
+  endsAt: string;
+  published: boolean;
+  notes?: string | null;
+  mission: MissionLite;
+  vehicle?: {
+    id: string;
+    fleetNumber: string;
+    plate: string;
+    seats?: number;
+  } | null;
+  driver?: {
+    id: string;
+    employee: { firstName: string; lastName: string };
+  } | null;
+};
+
+type DriverStat = {
+  driverId: string;
+  tteHours: number;
+  vacCount: number;
+  debut: string | null;
+  fin: string | null;
+  vehiclesUsed: string[];
+  primaryVehicle: {
+    fleetNumber: string;
+    plate: string;
+  } | null;
+  weeklyRest: boolean;
+  overtime: boolean;
+};
 
 type Board = {
   mode: Mode;
   from: string;
   to: string;
   days: number;
-  drivers: Array<{ id: string; employee: { firstName: string; lastName: string } }>;
-  vehicles: Array<{ id: string; fleetNumber: string; plate: string; status: string }>;
-  assignments: Array<{
+  drivers: Array<{
     id: string;
-    driverId?: string;
-    vehicleId?: string;
+    employee: { firstName: string; lastName: string };
+    depot?: { name: string } | null;
+  }>;
+  vehicles: Array<{
+    id: string;
+    fleetNumber: string;
+    plate: string;
+    seats: number;
+    status: string;
+    hasPmr?: boolean;
+  }>;
+  assignments: Assignment[];
+  rests: Array<{
+    id: string;
+    driverId: string;
     startsAt: string;
     endsAt: string;
-    published: boolean;
-    mission: { id: string; number: string; title: string };
-    vehicle?: { fleetNumber: string };
+    kind: string;
   }>;
-  rests: Array<{ id: string; driverId: string; startsAt: string; endsAt: string; kind: string }>;
   driverUnavs: Array<{
     id: string;
     driverId: string;
     startsAt: string;
     endsAt: string;
     kind: string;
-    reason?: string;
+    reason?: string | null;
   }>;
-  orphans: Array<{ id: string; number: string; title: string; startsAt: string; endsAt: string }>;
+  orphans: MissionLite[];
+  pool: {
+    unassigned: MissionLite[];
+    cancelled: MissionLite[];
+    unprogrammed: MissionLite[];
+  };
+  driverStats: DriverStat[];
   conflicts: Array<{ type: string; a?: string; b?: string; assignmentId?: string }>;
 };
 
-const DAY_MS = 86400000;
+type PoolTab = 'unassigned' | 'unprogrammed' | 'cancelled';
+
+const HOURS = Array.from({ length: 25 }, (_, i) => i);
+
+const BAR_COLORS = [
+  'bg-[#2563eb]',
+  'bg-[#059669]',
+  'bg-[#d97706]',
+  'bg-[#7c3aed]',
+  'bg-[#db2777]',
+  'bg-[#0891b2]',
+];
+
+function colorFor(mission: MissionLite) {
+  const key = mission.order?.quote?.serviceType || mission.status || mission.number;
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h + key.charCodeAt(i) * (i + 1)) % BAR_COLORS.length;
+  return BAR_COLORS[h];
+}
+
+function fmtTime(iso?: string | null) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function fmtDateTime(iso?: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('fr-FR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+}
+
+function durationMin(start: string, end: string) {
+  return Math.max(
+    0,
+    Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000),
+  );
+}
+
+function parseStops(json?: string | null): Array<{ time?: string; name: string }> {
+  if (!json) return [];
+  try {
+    const raw = JSON.parse(json);
+    if (!Array.isArray(raw)) return [];
+    return raw.map((s) =>
+      typeof s === 'string'
+        ? { name: s }
+        : { time: s.time || s.plannedTime, name: s.name || s.label || 'Arrêt' },
+    );
+  } catch {
+    return [];
+  }
+}
+
+function pctInDay(iso: string, dayStart: number, dayMs: number) {
+  return ((new Date(iso).getTime() - dayStart) / dayMs) * 100;
+}
+
+/** Date locale YYYY-MM-DD (évite le décalage UTC de toISOString). */
+function localYmd(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Midi local pour parser une date calendaire sans basculer de jour en UTC. */
+function localNoonIso(ymd: string) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0, 0).toISOString();
+}
 
 export default function PlanningPage() {
-  const [mode, setMode] = useState<Mode>('fortnight');
-  const [from, setFrom] = useState(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.toISOString().slice(0, 10);
-  });
+  const [mode, setMode] = useState<Mode>('day');
+  const [from, setFrom] = useState(() => localYmd());
   const [data, setData] = useState<Board | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [msg, setMsg] = useState('');
   const [resource, setResource] = useState<'drivers' | 'vehicles'>('drivers');
-  const [suggest, setSuggest] = useState<{
-    drivers: Array<{ id: string; employee: { firstName: string; lastName: string } }>;
-    vehicles: Array<{ id: string; fleetNumber: string; plate: string }>;
-  } | null>(null);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(
+    null,
+  );
+  const [selectedMissionId, setSelectedMissionId] = useState<string | null>(null);
+  const [placeDriverId, setPlaceDriverId] = useState<string | null>(null);
+  const [placeVehicleId, setPlaceVehicleId] = useState('');
+  const [poolTab, setPoolTab] = useState<PoolTab>('unassigned');
+  const [poolSearch, setPoolSearch] = useState('');
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [zoom, setZoom] = useState(1);
 
-  const load = () =>
-    api<Board>(`/planning/board?from=${new Date(from).toISOString()}&mode=${mode}`).then(
-      setData,
-    );
-
-  useEffect(() => {
-    load();
+  const load = useCallback(() => {
+    return api<Board>(
+      `/planning/board?from=${encodeURIComponent(localNoonIso(from))}&mode=${mode}`,
+    ).then(setData);
   }, [from, mode]);
 
-  const days = useMemo(() => {
-    if (!data) return [];
-    const start = new Date(data.from);
-    return Array.from({ length: data.days }, (_, i) => new Date(start.getTime() + i * DAY_MS));
+  useEffect(() => {
+    load().catch((e) => setErr(e.message));
+  }, [load]);
+
+  const dayStart = useMemo(
+    () => (data ? new Date(data.from).getTime() : 0),
+    [data],
+  );
+  const dayMs = 86400000;
+  const isDay = mode === 'day';
+
+  const selectedAssignment = data?.assignments.find(
+    (a) => a.id === selectedAssignmentId,
+  );
+  const selectedPoolMission =
+    data?.pool.unassigned.find((m) => m.id === selectedMissionId) ||
+    data?.pool.cancelled.find((m) => m.id === selectedMissionId) ||
+    data?.orphans.find((m) => m.id === selectedMissionId) ||
+    null;
+
+  const detailMission =
+    selectedAssignment?.mission || selectedPoolMission || null;
+
+  const statsByDriver = useMemo(() => {
+    const map = new Map<string, DriverStat>();
+    data?.driverStats.forEach((s) => map.set(s.driverId, s));
+    return map;
   }, [data]);
 
-  const selectedA = data?.assignments.find((a) => a.id === selected);
+  const poolRows = useMemo(() => {
+    if (!data) return [];
+    const src =
+      poolTab === 'cancelled'
+        ? data.pool.cancelled
+        : poolTab === 'unprogrammed'
+          ? data.pool.unprogrammed
+          : data.pool.unassigned;
+    const q = poolSearch.trim().toLowerCase();
+    if (!q) return src;
+    return src.filter((m) =>
+      [
+        m.number,
+        m.title,
+        m.origin,
+        m.destination,
+        m.order?.customer?.name,
+        m.order?.number,
+      ]
+        .filter(Boolean)
+        .some((x) => String(x).toLowerCase().includes(q)),
+    );
+  }, [data, poolTab, poolSearch]);
+
+  function shiftDay(delta: number) {
+    const [y, m, d] = from.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    date.setDate(date.getDate() + delta);
+    setFrom(localYmd(date));
+  }
+
+  async function placeOnDriver(
+    driverId: string,
+    vehicleId?: string,
+    missionId?: string,
+  ) {
+    const mid = missionId || selectedMissionId;
+    if (!mid) {
+      setErr(
+        'Sélectionnez d’abord une mission non affectée dans le panneau du bas',
+      );
+      return;
+    }
+    setBusy(true);
+    setErr('');
+    setMsg('');
+    try {
+      const a = await api<Assignment>('/planning/place', {
+        method: 'POST',
+        body: JSON.stringify({
+          missionId: mid,
+          driverId,
+          vehicleId: vehicleId || placeVehicleId || undefined,
+          publish: true,
+        }),
+      });
+      setMsg(
+        `Mission placée sur le planning (${a.mission?.number || mid})`,
+      );
+      setSelectedMissionId(null);
+      setPlaceDriverId(null);
+      setSelectedAssignmentId(a.id);
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unassign(id: string) {
+    setBusy(true);
+    try {
+      await api(`/planning/assignments/${id}/unassign`, {
+        method: 'POST',
+        body: '{}',
+      });
+      setSelectedAssignmentId(null);
+      setMsg('Mission désaffectée — revenue dans Non affectés');
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function publishOne(id: string) {
-    await api(`/planning/assignments/${id}/publish`, { method: 'POST', body: '{}' });
+    await api(`/planning/assignments/${id}/publish`, {
+      method: 'POST',
+      body: '{}',
+    });
     setMsg('Affectation publiée');
     load();
   }
@@ -81,97 +343,73 @@ export default function PlanningPage() {
     if (!data) return;
     const r = await api<{ updated: number }>('/planning/publish-range', {
       method: 'POST',
-      body: JSON.stringify({ from: data.from, to: data.to, label: `Lot ${mode}` }),
+      body: JSON.stringify({
+        from: data.from,
+        to: data.to,
+        label: `Lot ${mode}`,
+      }),
     });
     setMsg(`${r.updated} affectation(s) publiée(s)`);
     load();
   }
 
-  async function unassign(id: string) {
-    await api(`/planning/assignments/${id}/unassign`, { method: 'POST', body: '{}' });
-    setSelected(null);
-    setMsg('Désaffecté');
-    load();
+  async function autoAssignDay() {
+    setBusy(true);
+    setErr('');
+    try {
+      const r = await api<{ assigned: number; failed: number; total: number }>(
+        '/ops/auto-assign',
+        { method: 'POST', body: JSON.stringify({ date: from, dryRun: false }) },
+      );
+      setMsg(
+        `Auto-affectation : ${r.assigned}/${r.total}${r.failed ? ` · ${r.failed} échec(s)` : ''}`,
+      );
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function loadSuggest() {
-    if (!selectedA) return;
-    const r = await api(`/planning/suggest-replacement?startsAt=${selectedA.startsAt}&endsAt=${selectedA.endsAt}&excludeDriverId=${selectedA.driverId || ''}`);
-    setSuggest(r);
+  if (!data && !err) {
+    return <p className="text-sm text-[var(--muted)]">Chargement planning…</p>;
+  }
+  if (!data) {
+    return (
+      <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-rose-800">
+        {err}
+      </div>
+    );
   }
 
-  async function reassign(driverId?: string, vehicleId?: string) {
-    if (!selected) return;
-    await api(`/planning/assignments/${selected}/reassign`, {
-      method: 'POST',
-      body: JSON.stringify({ driverId, vehicleId }),
-    });
-    setMsg('Réaffecté');
-    setSuggest(null);
-    load();
-  }
+  const dayLabel = new Date(data.from).toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
 
-  async function assignOrphan(missionId: string, startsAt: string, endsAt: string) {
-    if (!data?.drivers[0] || !data.vehicles[0]) return;
-    const a = await api<{ id: string }>('/planning/assignments', {
-      method: 'POST',
-      body: JSON.stringify({
-        missionId,
-        driverId: data.drivers[0].id,
-        vehicleId: data.vehicles.find((v) => v.status === 'available')?.id || data.vehicles[0].id,
-        startsAt,
-        endsAt,
-      }),
-    });
-    await publishOne(a.id);
-  }
-
-  if (!data) return <p>Chargement planning…</p>;
-
-  const rangeStart = new Date(data.from).getTime();
-  const rangeEnd = new Date(data.to).getTime();
-  const range = Math.max(rangeEnd - rangeStart, 1);
-  const rows =
-    resource === 'drivers'
-      ? data.drivers.map((d) => ({
-          id: d.id,
-          label: `${d.employee.firstName} ${d.employee.lastName}`,
-        }))
-      : data.vehicles.map((v) => ({
-          id: v.id,
-          label: `${v.fleetNumber} · ${v.plate}`,
-        }));
+  const ganttWidth = isDay ? Math.round(1100 * zoom) : Math.max(data.days * 120, 900);
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Planning exploitation</h1>
-          <p className="text-sm text-[var(--muted)]">
-            {data.conflicts.length} conflit(s) · {data.orphans.length} mission(s) orpheline(s)
+    <div className="flex min-h-[calc(100dvh-8rem)] flex-col gap-2">
+      {/* Toolbar */}
+      <div className="flex shrink-0 flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <p className="page-kicker">Module exploitation</p>
+          <h1 className="truncate text-lg font-bold capitalize sm:text-xl">
+            Construction planning — {dayLabel}
+          </h1>
+          <p className="text-xs text-[var(--muted)]">
+            {data.conflicts.length} conflit(s) · {data.pool.unassigned.length}{' '}
+            non affectée(s) · sélectionnez une mission puis un conducteur pour
+            placer
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {(['day', 'week', 'fortnight'] as Mode[]).map((m) => (
-            <button
-              key={m}
-              className={mode === m ? 'btn-primary' : 'btn-ghost border border-[var(--border)]'}
-              onClick={() => setMode(m)}
-            >
-              {m === 'day' ? 'Jour' : m === 'week' ? 'Semaine' : 'Quatorzaine'}
-            </button>
-          ))}
-          <button
-            className={resource === 'drivers' ? 'btn-primary' : 'btn-ghost border border-[var(--border)]'}
-            onClick={() => setResource('drivers')}
-          >
-            Conducteurs
-          </button>
-          <button
-            className={resource === 'vehicles' ? 'btn-primary' : 'btn-ghost border border-[var(--border)]'}
-            onClick={() => setResource('vehicles')}
-          >
-            Véhicules
+        <div className="flex max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5">
+          <button type="button" className="btn-secondary" onClick={() => shiftDay(-1)}>
+            ←
           </button>
           <input
             className="input w-auto"
@@ -179,238 +417,727 @@ export default function PlanningPage() {
             value={from}
             onChange={(e) => setFrom(e.target.value)}
           />
-          <button className="btn-primary" onClick={publishRange}>
-            Publier la période
+          <button type="button" className="btn-secondary" onClick={() => shiftDay(1)}>
+            →
           </button>
-        </div>
-      </div>
-
-      {msg && <p className="text-sm text-action">{msg}</p>}
-
-      <div className="card overflow-auto">
-        <div className={mode === 'day' ? 'min-w-[700px]' : 'min-w-[1100px]'}>
-          <div
-            className="grid border-b border-[var(--border)] bg-night/5 text-[10px] uppercase text-[var(--muted)]"
-            style={{
-              gridTemplateColumns: `180px repeat(${days.length}, 1fr)`,
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              setFrom(localYmd());
+              setMode('day');
             }}
           >
-            <div className="px-3 py-2">Ressource</div>
-            {days.map((d) => (
-              <div
-                key={d.toISOString()}
-                className="border-l border-[var(--border)] px-1 py-2 text-center"
-              >
-                {d.toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit' })}
-              </div>
-            ))}
-          </div>
-          {rows.map((row) => {
-            const blocks = data.assignments.filter((a) =>
-              resource === 'drivers' ? a.driverId === row.id : a.vehicleId === row.id,
-            );
-            const rests =
+            Aujourd’hui
+          </button>
+          {(['day', 'week', 'fortnight'] as Mode[]).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={
+                mode === m ? 'btn-primary' : 'btn-ghost border border-[var(--border)]'
+              }
+              onClick={() => setMode(m)}
+            >
+              {m === 'day' ? 'Jour' : m === 'week' ? 'Semaine' : '14 j'}
+            </button>
+          ))}
+          <button
+            type="button"
+            className={
               resource === 'drivers'
-                ? data.rests.filter((r) => r.driverId === row.id)
-                : [];
-            const unavs =
-              resource === 'drivers'
-                ? data.driverUnavs.filter((u) => u.driverId === row.id)
-                : [];
-            return (
-              <div
-                key={row.id}
-                className="relative grid h-16 border-b border-[var(--border)]"
-                style={{ gridTemplateColumns: '180px 1fr' }}
+                ? 'btn-primary'
+                : 'btn-ghost border border-[var(--border)]'
+            }
+            onClick={() => setResource('drivers')}
+          >
+            Conducteurs
+          </button>
+          <button
+            type="button"
+            className={
+              resource === 'vehicles'
+                ? 'btn-primary'
+                : 'btn-ghost border border-[var(--border)]'
+            }
+            onClick={() => setResource('vehicles')}
+          >
+            Véhicules
+          </button>
+          {isDay && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="btn-ghost border border-[var(--border)] px-2"
+                onClick={() => setZoom((z) => Math.max(0.7, z - 0.15))}
               >
-                <div className="flex items-center px-3 text-sm font-medium">{row.label}</div>
-                <div className="relative border-l border-[var(--border)]">
-                  <div
-                    className="pointer-events-none absolute inset-0 grid"
-                    style={{ gridTemplateColumns: `repeat(${days.length}, 1fr)` }}
-                  >
-                    {days.map((d) => (
-                      <div key={d.toISOString()} className="border-l border-[var(--border)]/50" />
-                    ))}
-                  </div>
-                  {unavs.map((u) => {
-                    const left = ((new Date(u.startsAt).getTime() - rangeStart) / range) * 100;
-                    const width =
-                      ((new Date(u.endsAt).getTime() - new Date(u.startsAt).getTime()) / range) *
-                      100;
-                    return (
-                      <div
-                        key={u.id}
-                        title={u.reason || u.kind}
-                        className="absolute top-1 h-12 rounded bg-danger/20 px-1 text-[10px] text-danger"
-                        style={{ left: `${Math.max(left, 0)}%`, width: `${Math.max(width, 2)}%` }}
-                      >
-                        Indispo
-                      </div>
-                    );
-                  })}
-                  {rests.map((r) => {
-                    const left = ((new Date(r.startsAt).getTime() - rangeStart) / range) * 100;
-                    const width =
-                      ((new Date(r.endsAt).getTime() - new Date(r.startsAt).getTime()) / range) *
-                      100;
-                    return (
-                      <div
-                        key={r.id}
-                        className="absolute top-2 h-10 rounded bg-night/15 px-1 text-[10px]"
-                        style={{ left: `${Math.max(left, 0)}%`, width: `${Math.max(width, 1)}%` }}
-                      >
-                        Repos
-                      </div>
-                    );
-                  })}
-                  {blocks.map((a) => {
-                    const left = ((new Date(a.startsAt).getTime() - rangeStart) / range) * 100;
-                    const width = Math.max(
-                      ((new Date(a.endsAt).getTime() - new Date(a.startsAt).getTime()) / range) *
-                        100,
-                      1.5,
-                    );
-                    return (
-                      <button
-                        key={a.id}
-                        type="button"
-                        onClick={() => setSelected(a.id)}
-                        title={`${a.mission.number} ${a.mission.title}`}
-                        className={`absolute top-2 h-10 overflow-hidden rounded px-1.5 text-left text-[10px] font-semibold text-white ${
-                          selected === a.id
-                            ? 'ring-2 ring-warn'
-                            : a.published
-                              ? 'bg-action'
-                              : 'bg-warn'
-                        }`}
-                        style={{
-                          left: `${Math.max(left, 0)}%`,
-                          width: `${Math.min(width, 100 - Math.max(left, 0))}%`,
-                        }}
-                      >
-                        {a.mission.number}
-                        {a.vehicle ? ` · ${a.vehicle.fleetNumber}` : ''}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
+                −
+              </button>
+              <span className="text-xs text-[var(--muted)]">Zoom</span>
+              <button
+                type="button"
+                className="btn-ghost border border-[var(--border)] px-2"
+                onClick={() => setZoom((z) => Math.min(2, z + 0.15))}
+              >
+                +
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={busy}
+            onClick={autoAssignDay}
+          >
+            Auto-affecter
+          </button>
+          <button type="button" className="btn-secondary" onClick={publishRange}>
+            Publier
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() =>
+              openPrintHtml(
+                `/documents/print/planning?from=${encodeURIComponent(from)}&to=${encodeURIComponent(data.to.slice(0, 10))}`,
+              ).catch((e) => setErr(e.message))
+            }
+          >
+            Imprimer
+          </button>
+          <Link href="/app/ops" className="btn-ghost border border-[var(--border)]">
+            Cockpit
+          </Link>
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="card space-y-3 p-4">
-          <h2 className="font-semibold">Détail sélection</h2>
-          {!selectedA && (
-            <p className="text-sm text-[var(--muted)]">Cliquez un bloc du Gantt.</p>
+      {(msg || err) && (
+        <div
+          className={`shrink-0 rounded-lg border px-3 py-2 text-sm ${
+            err
+              ? 'border-rose-200 bg-rose-50 text-rose-800'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          }`}
+        >
+          {err || msg}
+        </div>
+      )}
+
+      {selectedMissionId && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-action/30 bg-action/5 px-3 py-1.5 text-sm">
+          <span className="font-medium">
+            Mission sélectionnée : {selectedPoolMission?.number} — cliquez une
+            ligne conducteur pour placer
+          </span>
+          <select
+            className="input w-auto text-sm"
+            value={placeVehicleId}
+            onChange={(e) => setPlaceVehicleId(e.target.value)}
+          >
+            <option value="">Véhicule auto</option>
+            {data.vehicles.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.fleetNumber} · {v.plate} · {v.seats} pl.
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn-ghost text-sm"
+            onClick={() => setSelectedMissionId(null)}
+          >
+            Annuler sélection
+          </button>
+        </div>
+      )}
+
+      {/* Main split: Gantt + detail */}
+      <div className="grid min-h-[360px] flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="card min-h-[320px] overflow-hidden p-0">
+          <div className="h-full min-h-[300px] overflow-auto">
+            <div style={{ minWidth: isDay ? ganttWidth + 340 : ganttWidth + 200 }}>
+              {/* Header hours */}
+              <div
+                className="sticky top-0 z-20 grid border-b border-[var(--border)] bg-[#f8fafc] text-[10px] uppercase tracking-wide text-[var(--muted)]"
+                style={{
+                  gridTemplateColumns: isDay
+                    ? '200px 110px 56px 40px 52px 1fr'
+                    : '200px 1fr',
+                }}
+              >
+                <div className="px-3 py-2 font-semibold">Conducteur</div>
+                {isDay && (
+                  <>
+                    <div className="border-l border-[var(--border)] px-2 py-2">
+                      Véhicule
+                    </div>
+                    <div className="border-l border-[var(--border)] px-1 py-2 text-center">
+                      TTE
+                    </div>
+                    <div className="border-l border-[var(--border)] px-1 py-2 text-center">
+                      Vac.
+                    </div>
+                    <div className="border-l border-[var(--border)] px-1 py-2 text-center">
+                      Début
+                    </div>
+                  </>
+                )}
+                <div className="relative border-l border-[var(--border)]">
+                  {isDay ? (
+                    <div
+                      className="relative h-8"
+                      style={{ width: ganttWidth }}
+                    >
+                      {HOURS.map((h) => (
+                        <div
+                          key={h}
+                          className="absolute top-0 h-full border-l border-[var(--border)]/60 px-0.5 pt-1"
+                          style={{ left: `${(h / 24) * 100}%` }}
+                        >
+                          {h}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      className="grid h-8"
+                      style={{
+                        gridTemplateColumns: `repeat(${data.days}, 1fr)`,
+                      }}
+                    >
+                      {Array.from({ length: data.days }, (_, i) => {
+                        const d = new Date(data.from);
+                        d.setDate(d.getDate() + i);
+                        return (
+                          <div
+                            key={i}
+                            className="border-l border-[var(--border)] px-1 py-2 text-center"
+                          >
+                            {d.toLocaleDateString('fr-FR', {
+                              weekday: 'short',
+                              day: '2-digit',
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Rows */}
+              {(resource === 'drivers' ? data.drivers : data.vehicles).map(
+                (row) => {
+                  const isDriver = resource === 'drivers';
+                  const driverId = isDriver ? row.id : null;
+                  const vehicleId = !isDriver ? row.id : null;
+                  const label = isDriver
+                    ? `${(row as Board['drivers'][0]).employee.lastName.toUpperCase()} ${(row as Board['drivers'][0]).employee.firstName}`
+                    : `${(row as Board['vehicles'][0]).fleetNumber} · ${(row as Board['vehicles'][0]).plate}`;
+                  const stats = isDriver
+                    ? statsByDriver.get(row.id)
+                    : undefined;
+                  const blocks = data.assignments.filter((a) =>
+                    isDriver ? a.driverId === row.id : a.vehicleId === row.id,
+                  );
+                  const rests = isDriver
+                    ? data.rests.filter((r) => r.driverId === row.id)
+                    : [];
+                  const unavs = isDriver
+                    ? data.driverUnavs.filter((u) => u.driverId === row.id)
+                    : [];
+                  const placing =
+                    selectedMissionId &&
+                    placeDriverId === row.id &&
+                    isDriver;
+                  const canPlace =
+                    !!selectedMissionId && isDriver && !stats?.weeklyRest;
+
+                  return (
+                    <div
+                      key={row.id}
+                      className={`grid border-b border-[var(--border)] ${
+                        canPlace ? 'cursor-pointer hover:bg-action/5' : ''
+                      } ${placing ? 'bg-action/10' : ''} ${
+                        stats?.weeklyRest ? 'bg-slate-100/80' : ''
+                      }`}
+                      style={{
+                        gridTemplateColumns: isDay
+                          ? '200px 110px 56px 40px 52px 1fr'
+                          : '200px 1fr',
+                        minHeight: 44,
+                      }}
+                      onClick={() => {
+                        if (!canPlace || !driverId) return;
+                        setPlaceDriverId(driverId);
+                        placeOnDriver(driverId, placeVehicleId || undefined);
+                      }}
+                    >
+                      <div className="flex items-center gap-2 truncate px-3 text-xs font-semibold">
+                        <span
+                          className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                            stats?.overtime
+                              ? 'bg-rose-500'
+                              : stats?.weeklyRest
+                                ? 'bg-slate-400'
+                                : 'bg-emerald-500'
+                          }`}
+                        />
+                        <span className="truncate">{label}</span>
+                      </div>
+                      {isDay && isDriver && (
+                        <>
+                          <div className="flex items-center border-l border-[var(--border)] px-2 text-[11px] text-[var(--muted)]">
+                            {stats?.primaryVehicle
+                              ? `${stats.primaryVehicle.fleetNumber}`
+                              : stats?.vehiclesUsed[0] || '—'}
+                          </div>
+                          <div
+                            className={`flex items-center justify-center border-l border-[var(--border)] text-[11px] font-semibold tabular-nums ${
+                              stats?.overtime ? 'bg-rose-100 text-rose-800' : ''
+                            }`}
+                          >
+                            {stats ? stats.tteHours.toFixed(2) : '0.00'}
+                          </div>
+                          <div className="flex items-center justify-center border-l border-[var(--border)] text-[11px] tabular-nums">
+                            {stats?.vacCount ?? 0}
+                          </div>
+                          <div className="flex items-center justify-center border-l border-[var(--border)] text-[11px] tabular-nums">
+                            {fmtTime(stats?.debut)}
+                          </div>
+                        </>
+                      )}
+                      {isDay && !isDriver && (
+                        <>
+                          <div className="border-l border-[var(--border)]" />
+                          <div className="border-l border-[var(--border)]" />
+                          <div className="border-l border-[var(--border)]" />
+                          <div className="border-l border-[var(--border)]" />
+                        </>
+                      )}
+                      <div
+                        className="relative border-l border-[var(--border)]"
+                        style={{
+                          width: isDay ? ganttWidth : undefined,
+                          minHeight: 44,
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* hour grid */}
+                        {isDay &&
+                          HOURS.map((h) => (
+                            <div
+                              key={h}
+                              className="pointer-events-none absolute inset-y-0 border-l border-[var(--border)]/40"
+                              style={{ left: `${(h / 24) * 100}%` }}
+                            />
+                          ))}
+
+                        {stats?.weeklyRest && isDay && (
+                          <div className="absolute inset-y-1 left-[5%] right-[5%] flex items-center justify-center rounded bg-slate-300/70 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                            Repos hebdomadaire
+                          </div>
+                        )}
+
+                        {unavs.map((u) => {
+                          const left = Math.max(
+                            0,
+                            pctInDay(u.startsAt, dayStart, dayMs),
+                          );
+                          const right = Math.min(
+                            100,
+                            pctInDay(u.endsAt, dayStart, dayMs),
+                          );
+                          return (
+                            <div
+                              key={u.id}
+                              title={u.reason || u.kind}
+                              className="absolute top-1 h-8 rounded bg-rose-200/80 px-1 text-[9px] text-rose-900"
+                              style={{
+                                left: `${left}%`,
+                                width: `${Math.max(right - left, 1)}%`,
+                              }}
+                            >
+                              Indispo
+                            </div>
+                          );
+                        })}
+
+                        {rests.map((r) => {
+                          const left = Math.max(
+                            0,
+                            pctInDay(r.startsAt, dayStart, dayMs),
+                          );
+                          const right = Math.min(
+                            100,
+                            pctInDay(r.endsAt, dayStart, dayMs),
+                          );
+                          return (
+                            <div
+                              key={r.id}
+                              className="absolute top-1 flex h-8 items-center justify-center rounded bg-slate-300/80 px-1 text-[9px] font-medium uppercase text-slate-700"
+                              style={{
+                                left: `${left}%`,
+                                width: `${Math.max(right - left, 1)}%`,
+                              }}
+                            >
+                              Repos
+                            </div>
+                          );
+                        })}
+
+                        {blocks.map((a) => {
+                          const rangeStart = dayStart;
+                          const range =
+                            mode === 'day'
+                              ? dayMs
+                              : new Date(data.to).getTime() - dayStart;
+                          const left = Math.max(
+                            0,
+                            ((new Date(a.startsAt).getTime() - rangeStart) /
+                              range) *
+                              100,
+                          );
+                          const width = Math.max(
+                            1.2,
+                            ((new Date(a.endsAt).getTime() -
+                              new Date(a.startsAt).getTime()) /
+                              range) *
+                              100,
+                          );
+                          const active = selectedAssignmentId === a.id;
+                          return (
+                            <button
+                              key={a.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedAssignmentId(a.id);
+                                setSelectedMissionId(null);
+                              }}
+                              title={`${a.mission.number} ${a.mission.title}\n${fmtDateTime(a.startsAt)} → ${fmtDateTime(a.endsAt)}`}
+                              className={`absolute top-1.5 h-7 overflow-hidden rounded px-1.5 text-left text-[10px] font-semibold text-white shadow-sm ${colorFor(a.mission)} ${
+                                active ? 'ring-2 ring-offset-1 ring-amber-400' : ''
+                              } ${!a.published ? 'opacity-80 ring-1 ring-dashed ring-white/70' : ''}`}
+                              style={{
+                                left: `${left}%`,
+                                width: `${Math.min(width, 100 - left)}%`,
+                              }}
+                            >
+                              <span className="block truncate">
+                                {a.mission.number}{' '}
+                                {(a.mission.origin || a.mission.title).slice(
+                                  0,
+                                  18,
+                                )}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                },
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Detail panel */}
+        <aside className="card min-h-0 overflow-auto p-4">
+          <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-[var(--muted)]">
+            Informations
+          </h2>
+          {!detailMission && (
+            <p className="text-sm text-[var(--muted)]">
+              Cliquez une vacation sur le Gantt, ou une mission non affectée
+              ci-dessous.
+            </p>
           )}
-          {selectedA && (
-            <>
-              <div className="text-sm">
-                <div className="font-semibold">
-                  {selectedA.mission.number} — {selectedA.mission.title}
+          {detailMission && (
+            <div className="space-y-3 text-sm">
+              <div>
+                <div className="text-lg font-bold">{detailMission.number}</div>
+                <div className="font-medium">{detailMission.title}</div>
+                <div className="text-xs text-[var(--muted)]">
+                  {detailMission.order?.customer?.name || '—'}
+                  {detailMission.order?.quote?.number
+                    ? ` · Devis ${detailMission.order.quote.number}`
+                    : ''}
+                </div>
+              </div>
+              <div className="rounded-lg bg-[var(--surface-2)] p-3 text-xs leading-relaxed">
+                <div>
+                  <strong>Durée :</strong>{' '}
+                  {durationMin(detailMission.startsAt, detailMission.endsAt)} mn
                 </div>
                 <div>
-                  {new Date(selectedA.startsAt).toLocaleString('fr-FR')} →{' '}
-                  {new Date(selectedA.endsAt).toLocaleString('fr-FR')}
+                  <strong>Départ :</strong> {fmtDateTime(detailMission.startsAt)}
                 </div>
-                <div>{selectedA.published ? 'Publié' : 'Brouillon'}</div>
+                <div>
+                  <strong>Arrivée :</strong> {fmtDateTime(detailMission.endsAt)}
+                </div>
+                <div>
+                  <strong>Trajet :</strong> {detailMission.origin || '—'} →{' '}
+                  {detailMission.destination || '—'}
+                </div>
+                {detailMission.originAddress && (
+                  <div>
+                    <strong>Adr. départ :</strong>{' '}
+                    {detailMission.originAddress}
+                  </div>
+                )}
+                {detailMission.destinationAddress && (
+                  <div>
+                    <strong>Adr. arrivée :</strong>{' '}
+                    {detailMission.destinationAddress}
+                  </div>
+                )}
+                <div>
+                  <strong>Passagers :</strong> {detailMission.passengers}
+                  {detailMission.minSeats
+                    ? ` (min ${detailMission.minSeats} pl.)`
+                    : ''}
+                  {detailMission.requiresPmr ? ' · PMR' : ''}
+                </div>
+                {detailMission.order?.quote?.vehicleCategory && (
+                  <div>
+                    <strong>Famille véhicule :</strong>{' '}
+                    {detailMission.order.quote.vehicleCategory.name}
+                  </div>
+                )}
+                {detailMission.estimatedKm != null && (
+                  <div>
+                    <strong>Km estimés :</strong> {detailMission.estimatedKm}
+                  </div>
+                )}
+                {selectedAssignment?.vehicle && (
+                  <div>
+                    <strong>Véhicule :</strong>{' '}
+                    {selectedAssignment.vehicle.fleetNumber} ·{' '}
+                    {selectedAssignment.vehicle.plate}
+                  </div>
+                )}
+                {selectedAssignment?.driver && (
+                  <div>
+                    <strong>Conducteur :</strong>{' '}
+                    {selectedAssignment.driver.employee.firstName}{' '}
+                    {selectedAssignment.driver.employee.lastName}
+                  </div>
+                )}
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Link className="btn-ghost border border-[var(--border)]" href={`/app/missions/${selectedA.mission.id}`}>
+
+              {parseStops(detailMission.stopsJson).length > 0 && (
+                <div>
+                  <div className="mb-1 text-xs font-semibold uppercase text-[var(--muted)]">
+                    Itinéraire
+                  </div>
+                  <ul className="space-y-1 text-xs">
+                    {parseStops(detailMission.stopsJson).map((s, i) => (
+                      <li key={i}>
+                        {s.time ? `${s.time} : ` : ''}
+                        {s.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {(detailMission.clientBrief ||
+                detailMission.opsNotes ||
+                detailMission.roadSheetNotes) && (
+                <div className="space-y-1 text-xs">
+                  {detailMission.clientBrief && (
+                    <p>
+                      <strong>Brief :</strong> {detailMission.clientBrief}
+                    </p>
+                  )}
+                  {detailMission.opsNotes && (
+                    <p>
+                      <strong>Ops :</strong> {detailMission.opsNotes}
+                    </p>
+                  )}
+                  {detailMission.roadSheetNotes && (
+                    <p>
+                      <strong>Feuille de route :</strong>{' '}
+                      {detailMission.roadSheetNotes}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Link
+                  className="btn-secondary text-xs"
+                  href={`/app/missions/${detailMission.id}`}
+                >
                   Ouvrir mission
                 </Link>
-                {!selectedA.published && (
-                  <button className="btn-primary" onClick={() => publishOne(selectedA.id)}>
+                {selectedAssignment && !selectedAssignment.published && (
+                  <button
+                    type="button"
+                    className="btn-primary text-xs"
+                    onClick={() => publishOne(selectedAssignment.id)}
+                  >
                     Publier
                   </button>
                 )}
-                <button className="btn-ghost border border-[var(--border)]" onClick={loadSuggest}>
-                  Proposer remplacement
-                </button>
-                <Link
-                  className="btn-primary"
-                  href={`/app/dressing?assignmentId=${selectedA.id}`}
-                >
-                  Habillage HLP
-                </Link>
-                <button className="btn-danger" onClick={() => unassign(selectedA.id)}>
-                  Désaffecter
-                </button>
+                {selectedAssignment && (
+                  <>
+                    <Link
+                      className="btn-secondary text-xs"
+                      href={`/app/dressing?assignmentId=${selectedAssignment.id}`}
+                    >
+                      Habillage HLP
+                    </Link>
+                    <button
+                      type="button"
+                      className="btn-danger text-xs"
+                      disabled={busy}
+                      onClick={() => unassign(selectedAssignment.id)}
+                    >
+                      Désaffecter
+                    </button>
+                  </>
+                )}
+                {selectedPoolMission && (
+                  <p className="w-full text-xs text-action">
+                    Cliquez une ligne conducteur du Gantt pour placer cette
+                    mission.
+                  </p>
+                )}
               </div>
-              {suggest && (
-                <div className="rounded-lg border border-[var(--border)] p-3 text-sm">
-                  <div className="font-medium">Conducteurs libres</div>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {suggest.drivers.map((d) => (
-                      <button
-                        key={d.id}
-                        className="btn-primary"
-                        onClick={() => reassign(d.id)}
-                      >
-                        {d.employee.firstName} {d.employee.lastName}
-                      </button>
-                    ))}
-                    {suggest.drivers.length === 0 && <span>Aucun</span>}
-                  </div>
-                  <div className="mt-2 font-medium">Véhicules libres</div>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {suggest.vehicles.map((v) => (
-                      <button
-                        key={v.id}
-                        className="btn-ghost border border-[var(--border)]"
-                        onClick={() => reassign(undefined, v.id)}
-                      >
-                        {v.fleetNumber}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
+            </div>
           )}
-        </section>
+        </aside>
+      </div>
 
-        <section className="card space-y-3 p-4">
-          <h2 className="font-semibold">Missions orphelines</h2>
-          {data.orphans.length === 0 && (
-            <p className="text-sm text-[var(--muted)]">Toutes les missions sont affectées.</p>
-          )}
-          <ul className="space-y-2 text-sm">
-            {data.orphans.map((m) => (
-              <li
-                key={m.id}
-                className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2"
-              >
-                <div>
-                  <div className="font-medium">
-                    {m.number} — {m.title}
-                  </div>
-                  <div className="text-[var(--muted)]">
-                    {new Date(m.startsAt).toLocaleString('fr-FR')}
-                  </div>
-                </div>
-                <button
-                  className="btn-primary"
-                  onClick={() => assignOrphan(m.id, m.startsAt, m.endsAt)}
-                >
-                  Affecter
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div className="flex gap-2 pt-2">
-            <Link href="/app/rosters" className="btn-ghost border border-[var(--border)]">
-              Roulements
-            </Link>
-            <Link href="/app/unavailabilities" className="btn-ghost border border-[var(--border)]">
-              Indisponibilités
-            </Link>
+      {/* Bottom pool */}
+      <div className="card flex h-[240px] max-h-[32vh] min-h-[160px] shrink-0 flex-col overflow-hidden p-0">
+        <div className="flex flex-wrap items-center gap-1 border-b border-[var(--border)] bg-[#f8fafc] px-2 pt-2">
+          {(
+            [
+              ['unassigned', `Non affectés (${data.pool.unassigned.length})`],
+              [
+                'unprogrammed',
+                `Non programmés (${data.pool.unprogrammed.length})`,
+              ],
+              ['cancelled', `Annulés (${data.pool.cancelled.length})`],
+            ] as Array<[PoolTab, string]>
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className={`rounded-t-lg px-3 py-1.5 text-xs font-medium ${
+                poolTab === key
+                  ? 'bg-white text-night shadow-sm'
+                  : 'text-[var(--muted)] hover:text-night'
+              }`}
+              onClick={() => setPoolTab(key)}
+            >
+              {label}
+            </button>
+          ))}
+          <div className="ml-auto pb-1.5 pr-1">
+            <input
+              className="input h-8 w-56 text-xs"
+              placeholder="Rechercher mission, client…"
+              value={poolSearch}
+              onChange={(e) => setPoolSearch(e.target.value)}
+            />
           </div>
-        </section>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-white text-[10px] uppercase text-[var(--muted)]">
+              <tr>
+                <th className="px-3 py-2">Pax</th>
+                <th className="px-3 py-2">N°</th>
+                <th className="px-3 py-2">Libellé</th>
+                <th className="px-3 py-2">Départ</th>
+                <th className="px-3 py-2">Arrivée</th>
+                <th className="px-3 py-2">Client</th>
+                <th className="px-3 py-2">Lieu départ</th>
+                <th className="px-3 py-2">Lieu arrivée</th>
+                <th className="px-3 py-2">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {poolRows.map((m) => {
+                const active = selectedMissionId === m.id;
+                return (
+                  <tr
+                    key={m.id}
+                    className={`cursor-pointer border-t border-[var(--border)] ${
+                      active
+                        ? 'bg-action/10'
+                        : m.requiresPmr
+                          ? 'bg-teal-50/50'
+                          : 'hover:bg-[var(--surface-2)]/60'
+                    }`}
+                    onClick={() => {
+                      setSelectedMissionId(m.id);
+                      setSelectedAssignmentId(null);
+                    }}
+                  >
+                    <td className="px-3 py-2 font-semibold tabular-nums">
+                      {m.passengers}
+                      {m.requiresPmr ? ' PMR' : ''}
+                    </td>
+                    <td className="px-3 py-2 font-semibold">{m.number}</td>
+                    <td className="px-3 py-2">{m.title}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {fmtDateTime(m.startsAt)}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {fmtDateTime(m.endsAt)}
+                    </td>
+                    <td className="px-3 py-2">
+                      {m.order?.customer?.name || '—'}
+                    </td>
+                    <td className="px-3 py-2">{m.origin || '—'}</td>
+                    <td className="px-3 py-2">{m.destination || '—'}</td>
+                    <td className="px-3 py-2">
+                      {poolTab !== 'cancelled' && (
+                        <button
+                          type="button"
+                          className="btn-primary px-2 py-1 text-[10px]"
+                          disabled={busy || !data.drivers[0]}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedMissionId(m.id);
+                            setSelectedAssignmentId(null);
+                            const free =
+                              data.drivers.find((d) => {
+                                const st = statsByDriver.get(d.id);
+                                return !st?.weeklyRest;
+                              }) || data.drivers[0];
+                            void placeOnDriver(
+                              free.id,
+                              placeVehicleId || undefined,
+                              m.id,
+                            );
+                          }}
+                        >
+                          Placer
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {poolRows.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={9}
+                    className="px-3 py-8 text-center text-[var(--muted)]"
+                  >
+                    Aucune mission dans cet onglet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

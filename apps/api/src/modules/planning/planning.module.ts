@@ -33,62 +33,92 @@ class PlanningController {
     const end = new Date(start);
     end.setDate(end.getDate() + days);
 
-    const [drivers, vehicles, assignments, rests, driverUnavs, vehicleUnavs, orphans] =
-      await Promise.all([
-        this.prisma.driver.findMany({
-          where: { companyId: user.companyId, status: 'active' },
-          include: { employee: true, depot: true },
-        }),
-        this.prisma.vehicle.findMany({
-          where: { companyId: user.companyId },
-          include: { depot: true },
-        }),
-        this.prisma.assignment.findMany({
-          where: {
-            companyId: user.companyId,
-            startsAt: { lt: end },
-            endsAt: { gt: start },
-          },
-          include: {
-            mission: { include: { order: { include: { customer: true } } } },
-            driver: { include: { employee: true } },
-            vehicle: true,
-          },
-          orderBy: { startsAt: 'asc' },
-        }),
-        this.prisma.plannedRest.findMany({
-          where: {
-            companyId: user.companyId,
-            startsAt: { lt: end },
-            endsAt: { gt: start },
-          },
-        }),
-        this.prisma.driverUnavailability.findMany({
-          where: {
-            companyId: user.companyId,
-            startsAt: { lt: end },
-            endsAt: { gt: start },
-          },
-          include: { driver: { include: { employee: true } } },
-        }),
-        this.prisma.vehicleUnavailability.findMany({
-          where: {
-            companyId: user.companyId,
-            startsAt: { lt: end },
-            endsAt: { gt: start },
-          },
-          include: { vehicle: true },
-        }),
-        this.prisma.mission.findMany({
-          where: {
-            companyId: user.companyId,
-            startsAt: { lt: end },
-            endsAt: { gt: start },
-            assignments: { none: {} },
-          },
-          include: { order: { include: { customer: true } } },
-        }),
-      ]);
+    const missionInclude = {
+      order: {
+        include: {
+          customer: true,
+          quote: { include: { vehicleCategory: true } },
+        },
+      },
+    } as const;
+
+    const [
+      drivers,
+      vehicles,
+      assignments,
+      rests,
+      driverUnavs,
+      vehicleUnavs,
+      unassigned,
+      cancelled,
+    ] = await Promise.all([
+      this.prisma.driver.findMany({
+        where: { companyId: user.companyId, status: 'active' },
+        include: { employee: true, depot: true },
+        orderBy: { employee: { lastName: 'asc' } },
+      }),
+      this.prisma.vehicle.findMany({
+        where: { companyId: user.companyId },
+        include: { depot: true, category: true },
+      }),
+      this.prisma.assignment.findMany({
+        where: {
+          companyId: user.companyId,
+          startsAt: { lt: end },
+          endsAt: { gt: start },
+        },
+        include: {
+          mission: { include: missionInclude },
+          driver: { include: { employee: true } },
+          vehicle: true,
+        },
+        orderBy: { startsAt: 'asc' },
+      }),
+      this.prisma.plannedRest.findMany({
+        where: {
+          companyId: user.companyId,
+          startsAt: { lt: end },
+          endsAt: { gt: start },
+        },
+      }),
+      this.prisma.driverUnavailability.findMany({
+        where: {
+          companyId: user.companyId,
+          startsAt: { lt: end },
+          endsAt: { gt: start },
+        },
+        include: { driver: { include: { employee: true } } },
+      }),
+      this.prisma.vehicleUnavailability.findMany({
+        where: {
+          companyId: user.companyId,
+          startsAt: { lt: end },
+          endsAt: { gt: start },
+        },
+        include: { vehicle: true },
+      }),
+      this.prisma.mission.findMany({
+        where: {
+          companyId: user.companyId,
+          startsAt: { lt: end },
+          endsAt: { gt: start },
+          assignments: { none: {} },
+          status: { notIn: ['cancelled'] },
+        },
+        include: missionInclude,
+        orderBy: { startsAt: 'asc' },
+      }),
+      this.prisma.mission.findMany({
+        where: {
+          companyId: user.companyId,
+          startsAt: { lt: end },
+          endsAt: { gt: start },
+          status: 'cancelled',
+        },
+        include: missionInclude,
+        orderBy: { startsAt: 'asc' },
+      }),
+    ]);
 
     const conflicts = detectConflicts(assignments);
     const unavConflicts = [
@@ -114,6 +144,54 @@ class PlanningController {
         .map((a) => ({ type: 'vehicle_unavailability', assignmentId: a.id })),
     ];
 
+    /** Stats journalières par conducteur (TTE, vacations, début, véhicule principal) */
+    const driverStats = drivers.map((d) => {
+      const mine = assignments
+        .filter((a) => a.driverId === d.id)
+        .sort(
+          (a, b) =>
+            new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
+        );
+      const tteHours =
+        Math.round(
+          (mine.reduce(
+            (s, a) =>
+              s +
+              Math.max(
+                0,
+                new Date(a.endsAt).getTime() - new Date(a.startsAt).getTime(),
+              ),
+            0,
+          ) /
+            3600000) *
+            100,
+        ) / 100;
+      const vehiclesUsed = [
+        ...new Set(
+          mine
+            .map((a) => a.vehicle?.fleetNumber || a.vehicle?.plate)
+            .filter(Boolean) as string[],
+        ),
+      ];
+      const primaryVehicle = mine.find((a) => a.vehicle)?.vehicle || null;
+      const weeklyRest = rests.some(
+        (r) =>
+          r.driverId === d.id &&
+          (r.kind === 'weekly_rest' || r.kind === 'repos_hebdo'),
+      );
+      return {
+        driverId: d.id,
+        tteHours,
+        vacCount: mine.length,
+        debut: mine[0]?.startsAt || null,
+        fin: mine.length ? mine[mine.length - 1].endsAt : null,
+        vehiclesUsed,
+        primaryVehicle,
+        weeklyRest,
+        overtime: tteHours > 9,
+      };
+    });
+
     return {
       mode,
       from: start.toISOString(),
@@ -125,7 +203,14 @@ class PlanningController {
       rests,
       driverUnavs,
       vehicleUnavs,
-      orphans,
+      /** compat */
+      orphans: unassigned,
+      pool: {
+        unassigned,
+        cancelled,
+        unprogrammed: unassigned.filter((m) => m.status === 'to_plan'),
+      },
+      driverStats,
       conflicts: [...conflicts, ...unavConflicts],
     };
   }
@@ -134,6 +219,96 @@ class PlanningController {
   @RequirePermission('planning', 'assignment', 'list')
   fortnight(@CurrentUser() user: RequestUser, @Query('from') from?: string) {
     return this.board(user, from, 'fortnight');
+  }
+
+  /**
+   * Place une mission non affectée sur un conducteur (et véhicule optionnel).
+   * Horaires = ceux de la mission sauf override.
+   */
+  @Post('place')
+  @RequirePermission('planning', 'assignment', 'assign')
+  async place(
+    @CurrentUser() user: RequestUser,
+    @Body()
+    body: {
+      missionId: string;
+      driverId: string;
+      vehicleId?: string;
+      startsAt?: string;
+      endsAt?: string;
+      publish?: boolean;
+    },
+  ) {
+    const mission = await this.prisma.mission.findFirst({
+      where: { id: body.missionId, companyId: user.companyId },
+      include: { assignments: true },
+    });
+    if (!mission) throw new BadRequestException('Mission introuvable');
+    if (mission.assignments.length > 0) {
+      throw new BadRequestException('Mission déjà affectée — désaffectez d’abord');
+    }
+    if (!body.driverId) throw new BadRequestException('Conducteur requis');
+
+    let vehicleId = body.vehicleId;
+    if (!vehicleId) {
+      // Reprendre le véhicule déjà utilisé ce jour par le conducteur si possible
+      const dayStart = startOfDay(mission.startsAt);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+      const sameDay = await this.prisma.assignment.findFirst({
+        where: {
+          companyId: user.companyId,
+          driverId: body.driverId,
+          vehicleId: { not: null },
+          startsAt: { lt: dayEnd },
+          endsAt: { gt: dayStart },
+        },
+        orderBy: { startsAt: 'desc' },
+      });
+      vehicleId = sameDay?.vehicleId || undefined;
+      if (!vehicleId) {
+        const need = mission.minSeats || mission.passengers || 0;
+        const candidate = await this.prisma.vehicle.findFirst({
+          where: {
+            companyId: user.companyId,
+            status: { in: ['available', 'in_service'] },
+            seats: need > 0 ? { gte: need } : undefined,
+            ...(mission.requiresPmr ? { hasPmr: true } : {}),
+          },
+          orderBy: { fleetNumber: 'asc' },
+        });
+        vehicleId = candidate?.id;
+      }
+    }
+
+    const assignment = await this.assign(user, {
+      missionId: body.missionId,
+      driverId: body.driverId,
+      vehicleId,
+      startsAt: body.startsAt || mission.startsAt.toISOString(),
+      endsAt: body.endsAt || mission.endsAt.toISOString(),
+      notes: 'Placé depuis le planning',
+    });
+    if (body.publish !== false) {
+      await this.publish(user, assignment.id);
+    }
+    return this.prisma.assignment.findFirstOrThrow({
+      where: { id: assignment.id },
+      include: {
+        mission: {
+          include: {
+            order: {
+              include: {
+                customer: true,
+                quote: { include: { vehicleCategory: true } },
+              },
+            },
+          },
+        },
+        driver: { include: { employee: true } },
+        vehicle: true,
+      },
+    });
   }
 
   @Post('assignments')
@@ -188,6 +363,27 @@ class PlanningController {
       }
     }
     if (body.vehicleId) {
+      const vehicle = await this.prisma.vehicle.findFirst({
+        where: { id: body.vehicleId, companyId: user.companyId },
+      });
+      if (!vehicle) throw new BadRequestException('Véhicule introuvable');
+      const needSeats = mission.minSeats || mission.passengers || 0;
+      if (needSeats > 0 && vehicle.seats < needSeats) {
+        throw new BadRequestException(
+          `Capacité insuffisante : ${vehicle.seats} places < ${needSeats} passagers`,
+        );
+      }
+      if (mission.requiresPmr && !vehicle.hasPmr) {
+        throw new BadRequestException(
+          'Ce véhicule n’est pas équipé PMR alors que la mission le requiert',
+        );
+      }
+      if (
+        vehicle.inspectionExpiresAt &&
+        vehicle.inspectionExpiresAt < startsAt
+      ) {
+        throw new BadRequestException('Contrôle technique du véhicule expiré');
+      }
       const overlap = await this.prisma.assignment.findFirst({
         where: {
           companyId: user.companyId,
@@ -214,6 +410,14 @@ class PlanningController {
           message: 'Véhicule indisponible',
           unavailabilityId: unav.id,
         });
+      }
+    }
+    if (body.driverId) {
+      const driver = await this.prisma.driver.findFirst({
+        where: { id: body.driverId, companyId: user.companyId },
+      });
+      if (driver?.licenseExpiresAt && driver.licenseExpiresAt < startsAt) {
+        throw new BadRequestException('Permis du conducteur expiré');
       }
     }
 

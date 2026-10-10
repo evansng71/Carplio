@@ -3,13 +3,20 @@
 @tailwind utilities;
 
 :root {
-  --bg: #f7f5f1;
+  --bg: #f3f6fa;
   --bg-elevated: #ffffff;
   --text: #0b1f33;
   --muted: #5b6b7c;
-  --border: #d9e0e8;
+  --border: #d5dee8;
   --action: #1b6ca8;
   --night: #0b1f33;
+  --ok: #1f7a4d;
+  --warn: #c47a1a;
+  --danger: #b42318;
+  --teal: #0f766e;
+  --violet: #6d28d9;
+  --cyan: #0891b2;
+  --orange: #ea580c;
 }
 
 .dark {
@@ -28,17 +35,23 @@ body {
 }
 
 body {
-  background: var(--bg);
+  background:
+    radial-gradient(900px 420px at 0% -10%, rgba(27, 108, 168, 0.08), transparent),
+    radial-gradient(700px 360px at 100% 0%, rgba(15, 118, 110, 0.06), transparent),
+    var(--bg);
   color: var(--text);
   font-family: var(--font-manrope), Manrope, system-ui, sans-serif;
 }
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold transition active:scale-[0.98];
   }
   .btn-primary {
-    @apply btn bg-action text-white hover:bg-action/90;
+    @apply btn bg-action text-white shadow-sm hover:bg-action/90;
+  }
+  .btn-secondary {
+    @apply btn border border-[var(--border)] bg-white text-night shadow-sm hover:border-action/40 hover:bg-action/5;
   }
   .btn-ghost {
     @apply btn bg-transparent text-night hover:bg-night/5 dark:text-cream dark:hover:bg-white/5;
@@ -46,13 +59,43 @@ body {
   .btn-danger {
     @apply btn bg-danger text-white hover:bg-danger/90;
   }
+  .btn-success {
+    @apply btn bg-ok text-white hover:bg-ok/90;
+  }
+  .btn-warn {
+    @apply btn bg-warn text-white hover:bg-warn/90;
+  }
   .card {
-    @apply rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-panel;
+    @apply rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-panel;
+  }
+  .card-interactive {
+    @apply card transition hover:-translate-y-0.5 hover:border-action/35 hover:shadow-md;
   }
   .input {
-    @apply w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm outline-none focus:border-action focus:ring-2 focus:ring-action/20;
+    @apply w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm outline-none focus:border-action focus:ring-2 focus:ring-action/20;
   }
   .label {
     @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--muted)];
+  }
+  .page-kicker {
+    @apply text-xs font-bold uppercase tracking-[0.16em] text-action;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold;
+  }
+  .badge-blue {
+    @apply badge bg-action/10 text-action;
+  }
+  .badge-ok {
+    @apply badge bg-ok/10 text-ok;
+  }
+  .badge-warn {
+    @apply badge bg-warn/10 text-warn;
+  }
+  .badge-danger {
+    @apply badge bg-danger/10 text-danger;
+  }
+  .badge-teal {
+    @apply badge bg-teal-700/10 text-teal-700;
   }
 }

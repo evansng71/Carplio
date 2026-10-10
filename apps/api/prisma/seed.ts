@@ -4,6 +4,7 @@ import { PERMISSION_CATALOG } from '@autocar/shared';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import PDFDocument from 'pdfkit';
+import { DEFAULT_TEMPLATES } from '../src/modules/documents/template-catalog';
 
 const prisma = new PrismaClient();
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD || 'Demo-Autocar-OS-2026!';
@@ -48,6 +49,7 @@ const GROUP_DEFS: Array<{
     key: 'sales',
     name: 'Commercial',
     permissionPrefixes: ['dashboard', 'customers', 'quotes', 'orders', 'missions', 'documents'],
+    deny: ['documents:template:manage'],
   },
   {
     key: 'hr_manager',
@@ -139,6 +141,10 @@ async function main() {
   await prisma.mission.deleteMany();
   await prisma.order.deleteMany();
   await prisma.quote.deleteMany();
+  await prisma.customerComment.deleteMany();
+  await prisma.customerDocument.deleteMany();
+  await prisma.customerDestination.deleteMany();
+  await prisma.customerBankAccount.deleteMany();
   await prisma.contact.deleteMany();
   await prisma.customer.deleteMany();
   await prisma.serviceCourseLink.deleteMany();
@@ -150,6 +156,8 @@ async function main() {
   await prisma.operatingCalendar.deleteMany();
   await prisma.location.deleteMany();
   await prisma.vehicle.deleteMany();
+  await prisma.vehicleCategory.deleteMany();
+  await prisma.documentTemplate.deleteMany();
   await prisma.employeeAccountLink.deleteMany();
   await prisma.driver.deleteMany();
   await prisma.employee.deleteMany();
@@ -171,8 +179,34 @@ async function main() {
       siret: '12345678900012',
       vatNumber: 'FR12123456789',
       isDemo: true,
+      brandName: 'AUTOCAR OS',
+      brandTagline: 'TRANSPORT VOYAGEURS',
+      loginHeadline: 'Pilotez vos exploitations en toute sérénité',
+      loginSubheadline:
+        'Une solution complète pour planifier, exploiter et optimiser votre activité de transport de voyageurs.',
+      loginFooterText: 'Gestion d’exploitation transport voyageurs',
+      loginHeroImageUrl: '/branding/login-hero-default.svg',
     },
   });
+
+  for (const def of DEFAULT_TEMPLATES) {
+    await prisma.documentTemplate.create({
+      data: {
+        companyId: company.id,
+        kind: def.kind,
+        key: def.key,
+        name: def.name,
+        description: def.description,
+        bodyHtml: def.bodyHtml,
+        headerHtml: def.headerHtml || null,
+        footerHtml: def.footerHtml || null,
+        stylesCss: def.stylesCss || null,
+        isDefault: true,
+        isSystem: true,
+        active: true,
+      },
+    });
+  }
 
   const depotLyon = await prisma.depot.create({
     data: { companyId: company.id, code: 'LYN', name: 'Dépôt Lyon', city: 'Lyon' },
@@ -390,10 +424,39 @@ async function main() {
     },
   });
 
+  const catGt = await prisma.vehicleCategory.create({
+    data: {
+      companyId: company.id,
+      code: 'GT',
+      name: 'Grand tourisme 55',
+      defaultSeats: 55,
+      description: 'Autocar GT 55 places',
+    },
+  });
+  const catStd = await prisma.vehicleCategory.create({
+    data: {
+      companyId: company.id,
+      code: 'STD',
+      name: 'Standard 53',
+      defaultSeats: 53,
+      description: 'Autocar standard 53 places',
+    },
+  });
+  await prisma.vehicleCategory.create({
+    data: {
+      companyId: company.id,
+      code: 'MINI',
+      name: 'Minibus 19',
+      defaultSeats: 19,
+      description: 'Minibus 19 places',
+    },
+  });
+
   const v1 = await prisma.vehicle.create({
     data: {
       companyId: company.id,
       depotId: depotLyon.id,
+      categoryId: catGt.id,
       fleetNumber: 'A12',
       plate: 'AB-123-CD',
       brand: 'Iveco',
@@ -405,6 +468,7 @@ async function main() {
     data: {
       companyId: company.id,
       depotId: depotGrenoble.id,
+      categoryId: catStd.id,
       fleetNumber: 'B07',
       plate: 'EF-456-GH',
       brand: 'Setra',
@@ -529,19 +593,83 @@ async function main() {
   const customer = await prisma.customer.create({
     data: {
       companyId: company.id,
+      reference: 'CLI-0001',
       name: 'Mairie de Villeurbanne (DEMO)',
+      tradeName: 'Ville de Villeurbanne',
       type: 'collectivity',
       email: 'transport@villeurbanne-demo.fr',
+      phone: '04 72 00 00 00',
+      siret: '21260979900012',
+      vatNumber: 'FR21260979900',
+      addressLine1: '3 place Lazare Goujon',
+      postalCode: '69100',
+      city: 'Villeurbanne',
+      country: 'France',
+      billingSameAsMain: true,
+      paymentTermsDays: 30,
+      alertNote: 'Demander bon de commande avant chaque départ scolaire.',
+      notes: 'Client collectivité — facturation trimestrielle préférée.',
       preferredVehicleNotes: 'Autocar accessible PMR',
       contacts: {
         create: [
           {
+            civility: 'Mme',
             firstName: 'Claire',
             lastName: 'Dupont',
             email: 'claire.dupont@villeurbanne-demo.fr',
-            role: 'Commande',
+            phone: '04 72 00 00 01',
+            role: 'Responsable commande',
+            department: 'Transport scolaire',
+            isPrimary: true,
             isBilling: true,
             isOps: true,
+          },
+          {
+            civility: 'M.',
+            firstName: 'Paul',
+            lastName: 'Martin',
+            email: 'paul.martin@villeurbanne-demo.fr',
+            role: 'Comptabilité',
+            isBilling: true,
+            isOps: false,
+          },
+        ],
+      },
+      bankAccounts: {
+        create: [
+          {
+            label: 'Compte principal',
+            bankName: 'Banque DEMO',
+            iban: 'FR76 3000 6000 0112 3456 7890 189',
+            bic: 'AGRIFRPP',
+            accountHolder: 'Mairie de Villeurbanne',
+            isDefault: true,
+          },
+        ],
+      },
+      destinations: {
+        create: [
+          {
+            label: 'Groupe scolaire Anatole France',
+            addressLine1: '12 rue Anatole France',
+            postalCode: '69100',
+            city: 'Villeurbanne',
+            country: 'France',
+          },
+          {
+            label: 'Parc de la Tête d’Or',
+            city: 'Lyon',
+            postalCode: '69006',
+            country: 'France',
+            notes: 'Dépose parking cars',
+          },
+        ],
+      },
+      comments: {
+        create: [
+          {
+            authorName: 'Alice Admin',
+            body: 'Client historique DEMO — bien suivre les délais de facturation 30 jours.',
           },
         ],
       },
@@ -566,6 +694,8 @@ async function main() {
       data: {
         companyId: company.id,
         customerId: customer.id,
+        salespersonId: commercial.id,
+        source: 'email',
         number: `D-2026-${String(100 + i).padStart(4, '0')}`,
         title: `Navette scolaire J+${i}`,
         caseType: 'repetitive',
@@ -573,9 +703,15 @@ async function main() {
         departureAt: startsAt,
         origin: 'Dépôt Lyon',
         destination: 'Collège Jean Moulin',
-        passengers: 48,
+        vehicleCount: 1,
+        vehicleCategoryId: catGt.id,
+        passengers: 55,
         amountHt: 220,
+        proposedPriceHt: 220,
         amountTtc: 242,
+        proposedAt: startsAt,
+        validUntil: new Date(startsAt.getTime() + 20 * 86400000),
+        acceptedAt: startsAt,
         availabilityNote: 'Seed DEMO',
         availabilityConfidence: 'medium',
       },

@@ -176,6 +176,7 @@ class HrController {
       email?: string;
       depotId?: string;
       licenseNumber?: string;
+      licenseCategories?: string;
     },
   ) {
     const employee = await this.prisma.employee.create({
@@ -195,8 +196,83 @@ class HrController {
         employeeId: employee.id,
         depotId: body.depotId,
         licenseNumber: body.licenseNumber,
+        licenseCategories: body.licenseCategories || 'D',
       },
       include: { employee: true },
+    });
+  }
+
+  @Patch('drivers/:id')
+  @RequirePermission('drivers', 'driver', 'update')
+  async updateDriver(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      depotId?: string | null;
+      licenseNumber?: string | null;
+      licenseCategories?: string | null;
+      licenseExpiresAt?: string | null;
+      cardExpiresAt?: string | null;
+      fcoExpiresAt?: string | null;
+      medicalExpiresAt?: string | null;
+      adrExpiresAt?: string | null;
+      qualifications?: string | null;
+      maxDailyHours?: number | null;
+      preferredNotes?: string | null;
+      status?: string;
+    },
+  ) {
+    const existing = await this.prisma.driver.findFirst({
+      where: { id, companyId: user.companyId },
+    });
+    if (!existing) throw new ForbiddenException('Conducteur introuvable');
+    const parse = (v?: string | null) => {
+      if (v === undefined) return undefined;
+      if (!v) return null;
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+    return this.prisma.driver.update({
+      where: { id },
+      data: {
+        ...(body.depotId !== undefined ? { depotId: body.depotId } : {}),
+        ...(body.licenseNumber !== undefined
+          ? { licenseNumber: body.licenseNumber }
+          : {}),
+        ...(body.licenseCategories !== undefined
+          ? { licenseCategories: body.licenseCategories }
+          : {}),
+        ...(body.licenseExpiresAt !== undefined
+          ? { licenseExpiresAt: parse(body.licenseExpiresAt) }
+          : {}),
+        ...(body.cardExpiresAt !== undefined
+          ? { cardExpiresAt: parse(body.cardExpiresAt) }
+          : {}),
+        ...(body.fcoExpiresAt !== undefined
+          ? { fcoExpiresAt: parse(body.fcoExpiresAt) }
+          : {}),
+        ...(body.medicalExpiresAt !== undefined
+          ? { medicalExpiresAt: parse(body.medicalExpiresAt) }
+          : {}),
+        ...(body.adrExpiresAt !== undefined
+          ? { adrExpiresAt: parse(body.adrExpiresAt) }
+          : {}),
+        ...(body.qualifications !== undefined
+          ? { qualifications: body.qualifications }
+          : {}),
+        ...(body.maxDailyHours !== undefined
+          ? { maxDailyHours: body.maxDailyHours }
+          : {}),
+        ...(body.preferredNotes !== undefined
+          ? { preferredNotes: body.preferredNotes }
+          : {}),
+        ...(body.status ? { status: body.status } : {}),
+      },
+      include: {
+        employee: true,
+        depot: true,
+      },
     });
   }
 

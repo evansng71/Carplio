@@ -14,6 +14,16 @@ model Company {
   siret     String?
   vatNumber String?
   isDemo    Boolean  @default(false)
+  /// Affiché sur la page de connexion / shell
+  brandName String?
+  brandTagline String?
+  loginHeadline String?
+  loginSubheadline String?
+  loginFooterText String?
+  /// URL ou data-URL (logo)
+  logoUrl String?
+  /// Grande image panneau gauche (connexion)
+  loginHeroImageUrl String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -24,6 +34,7 @@ model Company {
   drivers     Driver[]
   customers   Customer[]
   vehicles    Vehicle[]
+  vehicleCategories VehicleCategory[]
   locations   Location[]
   calendars   OperatingCalendar[]
   courses     Course[]
@@ -70,6 +81,39 @@ model Company {
   analyticsReports AnalyticsReport[]
   simulations Simulation[]
   clientRequests ClientQuoteRequest[]
+  documentTemplates DocumentTemplate[]
+}
+
+/// Modèles de documents imprimables (devis, factures, planning, billets…)
+model DocumentTemplate {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  /// quote | invoice | planning | collective_ticket | order
+  kind        String
+  key         String
+  name        String
+  description String?
+  /// HTML du corps avec variables {{...}}
+  bodyHtml    String
+  headerHtml  String?
+  footerHtml  String?
+  /// Mise en page visuelle (JSON blocs) — source de l’éditeur intuitif
+  layoutJson  String?
+  /// CSS print spécifique
+  stylesCss   String?
+  paperSize   String   @default("A4")
+  /// portrait | landscape
+  orientation String   @default("portrait")
+  isDefault   Boolean  @default(false)
+  isSystem    Boolean  @default(false)
+  active      Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([companyId, key])
+  @@index([companyId, kind])
 }
 
 model Depot {
@@ -113,6 +157,9 @@ model UserAccount {
   leaveRequests LeaveRequest[]
   readReceipts PortalReadReceipt[]
   serviceEvents DriverServiceEvent[]
+  salesQuotes  Quote[] @relation("QuoteSalesperson")
+  managedCustomers Customer[] @relation("CustomerAccountManager")
+  salesOrders  Order[] @relation("OrderSalesperson")
 
   @@unique([companyId, email])
 }
@@ -247,8 +294,18 @@ model Driver {
   depotId         String?
   depot           Depot?   @relation(fields: [depotId], references: [id])
   licenseNumber   String?
+  /// Catégories permis : D, D1, DE…
+  licenseCategories String? @default("D")
   licenseExpiresAt DateTime?
+  /// Carte conducteur chronotachygraphe
   cardExpiresAt   DateTime?
+  /// Formation continue obligatoire (FCO)
+  fcoExpiresAt    DateTime?
+  medicalExpiresAt DateTime?
+  adrExpiresAt    DateTime?
+  qualifications  String?
+  maxDailyHours   Float?   @default(9)
+  preferredNotes  String?
   status          String   @default("active")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -274,43 +331,179 @@ model EmployeeAccountLink {
 }
 
 model Customer {
-  id              String   @id @default(cuid())
-  companyId       String
-  company         Company  @relation(fields: [companyId], references: [id])
-  name            String
-  type            String   @default("enterprise")
-  siret           String?
-  vatNumber       String?
-  email           String?
-  phone           String?
-  billingAddress  String?
-  paymentTermsDays Int     @default(30)
-  notes           String?
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id])
+  /// Code / référence client affichée
+  reference        String?
+  name             String
+  tradeName        String?
+  type             String   @default("enterprise")
+  siret            String?
+  vatNumber        String?
+  email            String?
+  phone            String?
+  mobile           String?
+  website          String?
+  /// Adresse principale (siège / livraison)
+  addressLine1     String?
+  addressLine2     String?
+  postalCode       String?
+  city             String?
+  country          String?  @default("France")
+  /// Adresse de facturation (si différente)
+  billingSameAsMain Boolean @default(true)
+  billingAddressLine1 String?
+  billingAddressLine2 String?
+  billingPostalCode String?
+  billingCity      String?
+  billingCountry   String?
+  /// Legacy text field (conservé pour compat)
+  billingAddress   String?
+  paymentTermsDays Int      @default(30)
+  paymentMethod    String?  @default("transfer")
+  creditLimit      Float?
+  currency         String?  @default("EUR")
+  /// Champ alerte visible sur la fiche
+  alertNote        String?
+  notes            String?
+  internalRemarks  String?
   preferredVehicleNotes String?
   preferredDriverNotes  String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  /// Commercial dédié
+  accountManagerId String?
+  accountManager   UserAccount? @relation("CustomerAccountManager", fields: [accountManagerId], references: [id])
+  /// Code APE / NAF
+  apeCode          String?
+  /// E-mail dédié facturation
+  invoiceEmail     String?
+  /// BC client obligatoire avant facturation
+  requirePurchaseOrder Boolean @default(false)
+  /// Pénalités de retard (% annuel, mention légale)
+  latePenaltyRate  Float?   @default(10)
+  /// Escompte pour paiement anticipé (%)
+  earlyDiscountRate Float?  @default(0)
+  /// none | pending | active | revoked
+  sepaMandateStatus String? @default("none")
+  /// N° marché / convention / contrat-cadre
+  contractRef      String?
+  contractEndsAt   DateTime?
+  /// Notes tarifaires / grille négociée
+  pricingNotes     String?
+  archivedAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  contacts Contact[]
-  quotes   Quote[]
-  orders   Order[]
-  invoices Invoice[]
-  payments Payment[]
-  credits  CustomerCredit[]
+  contacts     Contact[]
+  bankAccounts CustomerBankAccount[]
+  destinations CustomerDestination[]
+  documents    CustomerDocument[]
+  comments     CustomerComment[]
+  quotes       Quote[]
+  orders       Order[]
+  invoices     Invoice[]
+  payments     Payment[]
+  credits      CustomerCredit[]
+
+  @@unique([companyId, reference])
+  @@index([companyId, name])
 }
 
 model Contact {
   id         String   @id @default(cuid())
   customerId String
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  civility   String?
   firstName  String
   lastName   String
   email      String?
   phone      String?
+  mobile     String?
   role       String?
+  department String?
+  isPrimary  Boolean  @default(false)
   isBilling  Boolean  @default(false)
   isOps      Boolean  @default(false)
+  notes      String?
   createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  quotes Quote[]
+}
+
+model CustomerBankAccount {
+  id            String   @id @default(cuid())
+  customerId    String
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  label         String   @default("Principal")
+  bankName      String?
+  iban          String?
+  bic           String?
+  accountHolder String?
+  rum           String?
+  isDefault     Boolean  @default(true)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model CustomerDestination {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  label       String
+  addressLine1 String?
+  addressLine2 String?
+  postalCode  String?
+  city        String?
+  country     String?  @default("France")
+  contactName String?
+  phone       String?
+  notes       String?
+  lastUsedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CustomerDocument {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name       String
+  category   String   @default("autre")
+  fileName   String?
+  mimeType   String?
+  /// URL ou data-URL (upload local)
+  fileUrl    String?
+  notes      String?
+  uploadedAt DateTime @default(now())
+}
+
+model CustomerComment {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  authorId   String?
+  authorName String?
+  body       String
+  createdAt  DateTime @default(now())
+}
+
+model VehicleCategory {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  code        String
+  name        String
+  defaultSeats Int     @default(53)
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  vehicles Vehicle[]
+  quotes   Quote[]
+
+  @@unique([companyId, code])
 }
 
 model Vehicle {
@@ -319,15 +512,32 @@ model Vehicle {
   company      Company  @relation(fields: [companyId], references: [id])
   depotId      String?
   depot        Depot?   @relation(fields: [depotId], references: [id])
+  categoryId   String?
+  category     VehicleCategory? @relation(fields: [categoryId], references: [id])
   fleetNumber  String
   plate        String
   vin          String?
   brand        String?
   model        String?
+  year         Int?
+  color        String?
   seats        Int      @default(53)
   energy       String   @default("diesel")
+  /// available | in_service | maintenance | unavailable
   status       String   @default("available")
   odometerKm   Int      @default(0)
+  /// Contrôle technique
+  inspectionExpiresAt DateTime?
+  insuranceExpiresAt  DateTime?
+  /// Étalonnage chronotachygraphe
+  tachographExpiresAt DateTime?
+  nextMaintenanceAt   DateTime?
+  nextMaintenanceKm   Int?
+  hasPmr       Boolean  @default(false)
+  hasToilet    Boolean  @default(false)
+  hasWifi      Boolean  @default(false)
+  optionsNotes String?
+  notes        String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -466,28 +676,97 @@ model Quote {
   company     Company  @relation(fields: [companyId], references: [id])
   customerId  String
   customer    Customer @relation(fields: [customerId], references: [id])
+  contactId   String?
+  contact     Contact? @relation(fields: [contactId], references: [id])
+  salespersonId String?
+  salesperson UserAccount? @relation("QuoteSalesperson", fields: [salespersonId], references: [id])
+  /// email | phone | postal | portal | other
+  source      String   @default("email")
   number      String
   caseType    String   @default("simple")
+  /// draft | sent | accepted | refused | trashed | planning | invoicing
   status      String   @default("draft")
   title       String
+  description String?
+  /// aller_retour | aller_simple | mad | circuit | transfert | scolaire | evenementiel
+  serviceType String   @default("aller_retour")
   departureAt DateTime?
   returnAt    DateTime?
+  /// Horaires détaillés (stockés en DateTime complets)
+  garageDepartureAt DateTime?
+  presentationAt    DateTime?
+  onSiteAt          DateTime?
+  returnDepartureAt DateTime?
+  returnGarageAt    DateTime?
   origin      String?
+  originAddress String?
   destination String?
+  destinationAddress String?
+  distanceKm  Float?
+  durationDays Float?  @default(1)
+  vehicleCount Int     @default(1)
+  vehicleCategoryId String?
+  vehicleCategory VehicleCategory? @relation(fields: [vehicleCategoryId], references: [id])
   passengers  Int      @default(0)
+  /// Prix catalogue / calculé (somme lignes ou forfait)
   amountHt    Float    @default(0)
+  /// Prix proposé au client
+  proposedPriceHt Float @default(0)
   vatRate     Float    @default(10)
   amountTtc   Float    @default(0)
   marginEst   Float?
+  depositPercent  Float @default(0)
+  depositAmountHt Float @default(0)
+  /// N° bon de commande client
+  customerPoNumber String?
+  billingEmail String?
+  luggageNotes String?
+  accessibilityNotes String?
+  optionsNotes String?
+  costTolls       Float @default(0)
+  costParking     Float @default(0)
+  costDriverMeals Float @default(0)
+  costHotel       Float @default(0)
+  costMisc        Float @default(0)
+  refusedReason String?
+  requestReceivedAt DateTime?
+  /// email | phone | postal | portal | other
+  requestChannel String?
+  proposedAt  DateTime?
+  validUntil  DateTime?
+  acceptedAt  DateTime?
+  announcedAt DateTime?
+  invoicedAt  DateTime?
+  dayDetails  String?
+  internalNotes String?
+  publishedToPortal Boolean @default(false)
+  publishedAt DateTime?
   availabilityNote String?
   availabilityConfidence String?
   version     Int      @default(1)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  order Order?
+  lines  QuoteLine[]
+  order  Order?
+  invoices Invoice[]
 
   @@unique([companyId, number])
+}
+
+model QuoteLine {
+  id          String @id @default(cuid())
+  quoteId     String
+  quote       Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  /// transport | toll | parking | meal | hotel | option | other
+  kind        String @default("transport")
+  label       String
+  /// forfait | km | heure | jour | pax | unite
+  unit        String @default("forfait")
+  quantity    Float  @default(1)
+  unitPriceHt Float  @default(0)
+  amountHt    Float  @default(0)
+  sortOrder   Int    @default(0)
 }
 
 model Order {
@@ -498,13 +777,32 @@ model Order {
   customer   Customer @relation(fields: [customerId], references: [id])
   quoteId    String?  @unique
   quote      Quote?   @relation(fields: [quoteId], references: [id])
+  salespersonId String?
+  salesperson UserAccount? @relation("OrderSalesperson", fields: [salespersonId], references: [id])
   number     String
+  /// confirmed | planned | in_progress | done | cancelled
   status     String   @default("confirmed")
   title      String
+  origin     String?
+  destination String?
+  departureAt DateTime?
+  returnAt   DateTime?
+  passengers Int      @default(0)
+  amountHt   Float    @default(0)
+  vatRate    Float    @default(10)
+  amountTtc  Float    @default(0)
+  depositPaidHt Float @default(0)
+  customerPoNumber String?
+  confirmedAt DateTime?
+  cancelledAt DateTime?
+  cancelReason String?
+  clientNotes String?
+  internalNotes String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   missions Mission[]
+  invoices Invoice[]
 
   @@unique([companyId, number])
 }
@@ -516,13 +814,28 @@ model Mission {
   orderId      String
   order        Order    @relation(fields: [orderId], references: [id])
   number       String
+  /// to_plan | planned | published | in_progress | done | ops_return_review | to_invoice | cancelled
   status       String   @default("to_plan")
   title        String
   startsAt     DateTime
   endsAt       DateTime
+  garageDepartureAt DateTime?
+  presentationAt    DateTime?
+  returnGarageAt    DateTime?
   origin       String?
+  originAddress String?
   destination  String?
+  destinationAddress String?
+  /// Arrêts intermédiaires JSON
+  stopsJson    String?
   passengers   Int      @default(0)
+  minSeats     Int?
+  requiresPmr  Boolean  @default(false)
+  estimatedKm  Float?
+  hlpKm        Float?
+  opsNotes     String?
+  clientBrief  String?
+  roadSheetNotes String?
   publishedAt  DateTime?
   ticketReturnedAt DateTime?
   ticketNotes  String?
@@ -536,6 +849,8 @@ model Mission {
   serviceEvents DriverServiceEvent[]
 
   @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, startsAt])
 }
 
 model Assignment {
@@ -856,7 +1171,12 @@ model Invoice {
   customerId       String
   customer         Customer @relation(fields: [customerId], references: [id])
   missionId        String?
+  quoteId          String?
+  quote            Quote?   @relation(fields: [quoteId], references: [id])
+  orderId          String?
+  order            Order?   @relation(fields: [orderId], references: [id])
   number           String
+  /// standard | deposit | interim | final | supplementary | credit_note
   kind             String   @default("standard")
   status           String   @default("draft")
   amountHt         Float    @default(0)
@@ -864,24 +1184,47 @@ model Invoice {
   amountTtc        Float    @default(0)
   balance          Float    @default(0)
   relatedInvoiceId String?
+  /// N° bon de commande client
+  customerPoNumber String?
+  paymentTermsDays Int?
+  paymentMethod    String?
+  /// Période de prestation facturée
+  serviceFrom      DateTime?
+  serviceTo        DateTime?
+  /// Mentions légales / pénalités / escompte
+  legalMentions    String?
+  reference        String?
   notes            String?
+  reminderCount    Int      @default(0)
+  lastReminderAt   DateTime?
+  /// Échéance de paiement
+  dueAt            DateTime?
   issuedAt         DateTime @default(now())
+  paidAt           DateTime?
   createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   lines       InvoiceLine[]
   allocations PaymentAllocation[]
 
   @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, customerId])
 }
 
 model InvoiceLine {
   id          String  @id @default(cuid())
   invoiceId   String
   invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  /// transport | toll | parking | meal | hotel | option | other
+  kind        String  @default("transport")
   label       String
+  /// forfait | km | heure | jour | pax | unite
+  unit        String  @default("forfait")
   quantity    Float   @default(1)
   unitPriceHt Float   @default(0)
   amountHt    Float   @default(0)
+  sortOrder   Int     @default(0)
 }
 
 model Payment {

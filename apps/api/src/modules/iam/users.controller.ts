@@ -1,13 +1,22 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsOptional, IsString } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsEmail,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuthService } from './auth.service';
 import { PermissionEngine } from './permission.engine';
@@ -27,6 +36,54 @@ class TestPermissionDto {
   @IsOptional()
   @IsString()
   depotId?: string;
+}
+
+class CreateUserDto {
+  @IsEmail()
+  email!: string;
+  @IsString()
+  @MaxLength(120)
+  displayName!: string;
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  groupIds?: string[];
+}
+
+class SetMembershipsDto {
+  @IsArray()
+  @IsString({ each: true })
+  groupIds!: string[];
+  @IsOptional()
+  @IsString()
+  depotId?: string | null;
+}
+
+class CreateGroupDto {
+  @IsString()
+  @MaxLength(60)
+  key!: string;
+  @IsString()
+  @MaxLength(120)
+  name!: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  description?: string;
+}
+
+class UpdateGroupDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  name?: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  description?: string;
+  @IsOptional()
+  @IsBoolean()
+  archived?: boolean;
 }
 
 @Controller()
@@ -55,6 +112,112 @@ export class UsersController {
     });
   }
 
+  @Post('users')
+  @RequirePermission('users', 'account', 'manage')
+  async createUser(
+    @CurrentUser() user: RequestUser,
+    @Body() body: CreateUserDto,
+  ) {
+    const email = body.email.toLowerCase().trim();
+    const existing = await this.prisma.userAccount.findUnique({
+      where: {
+        companyId_email: { companyId: user.companyId, email },
+      },
+    });
+    if (existing) throw new BadRequestException('Email déjà utilisé');
+
+    const created = await this.prisma.userAccount.create({
+      data: {
+        companyId: user.companyId,
+        email,
+        displayName: body.displayName.trim(),
+        status: 'invited',
+      },
+    });
+
+    const groupIds = body.groupIds || [];
+    for (const groupId of groupIds) {
+      const group = await this.prisma.group.findFirst({
+        where: { id: groupId, companyId: user.companyId, archivedAt: null },
+      });
+      if (!group) continue;
+      await this.prisma.groupMembership.create({
+        data: { groupId: group.id, userId: created.id },
+      });
+    }
+
+    const invite = await this.auth.resendInvitation(
+      created.id,
+      user.userId,
+      user.companyId,
+    );
+
+    await this.prisma.accessAuditEvent.create({
+      data: {
+        companyId: user.companyId,
+        actorId: user.userId,
+        action: 'user_created',
+        targetType: 'UserAccount',
+        targetId: created.id,
+        detailJson: JSON.stringify({ email, groupIds }),
+      },
+    });
+
+    return { user: created, invitationToken: invite.invitationToken };
+  }
+
+  @Patch('users/:userId/memberships')
+  @RequirePermission('users', 'account', 'manage')
+  async setMemberships(
+    @CurrentUser() user: RequestUser,
+    @Param('userId') userId: string,
+    @Body() body: SetMembershipsDto,
+  ) {
+    const target = await this.prisma.userAccount.findFirst({
+      where: { id: userId, companyId: user.companyId },
+    });
+    if (!target) throw new BadRequestException('Utilisateur introuvable');
+
+    const validGroups = await this.prisma.group.findMany({
+      where: {
+        companyId: user.companyId,
+        archivedAt: null,
+        id: { in: body.groupIds },
+      },
+    });
+    const validIds = new Set(validGroups.map((g) => g.id));
+
+    await this.prisma.groupMembership.deleteMany({ where: { userId } });
+    for (const groupId of body.groupIds) {
+      if (!validIds.has(groupId)) continue;
+      await this.prisma.groupMembership.create({
+        data: {
+          groupId,
+          userId,
+          depotId: body.depotId || null,
+        },
+      });
+    }
+
+    await this.prisma.accessAuditEvent.create({
+      data: {
+        companyId: user.companyId,
+        actorId: user.userId,
+        action: 'user_memberships_updated',
+        targetType: 'UserAccount',
+        targetId: userId,
+        detailJson: JSON.stringify(body),
+      },
+    });
+
+    return this.prisma.userAccount.findUnique({
+      where: { id: userId },
+      include: {
+        memberships: { include: { group: true, depot: true } },
+      },
+    });
+  }
+
   @Get('groups')
   @RequirePermission('groups', 'group', 'list')
   listGroups(@CurrentUser() user: RequestUser) {
@@ -66,6 +229,82 @@ export class UsersController {
       },
       orderBy: { name: 'asc' },
     });
+  }
+
+  @Post('groups')
+  @RequirePermission('groups', 'group', 'manage')
+  async createGroup(
+    @CurrentUser() user: RequestUser,
+    @Body() body: CreateGroupDto,
+  ) {
+    const key = body.key
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_|_$/g, '');
+    if (!key) throw new BadRequestException('Clé de groupe invalide');
+    const existing = await this.prisma.group.findUnique({
+      where: { companyId_key: { companyId: user.companyId, key } },
+    });
+    if (existing) throw new BadRequestException('Clé déjà utilisée');
+
+    const group = await this.prisma.group.create({
+      data: {
+        companyId: user.companyId,
+        key,
+        name: body.name.trim(),
+        description: body.description?.trim() || null,
+        isSystem: false,
+      },
+      include: {
+        permissions: { include: { permission: true } },
+        _count: { select: { memberships: true } },
+      },
+    });
+
+    await this.prisma.accessAuditEvent.create({
+      data: {
+        companyId: user.companyId,
+        actorId: user.userId,
+        action: 'group_created',
+        targetType: 'Group',
+        targetId: group.id,
+      },
+    });
+    return group;
+  }
+
+  @Patch('groups/:groupId')
+  @RequirePermission('groups', 'group', 'manage')
+  async updateGroup(
+    @CurrentUser() user: RequestUser,
+    @Param('groupId') groupId: string,
+    @Body() body: UpdateGroupDto,
+  ) {
+    const group = await this.prisma.group.findFirst({
+      where: { id: groupId, companyId: user.companyId },
+    });
+    if (!group) throw new BadRequestException('Groupe introuvable');
+    if (group.isSystem && body.archived) {
+      throw new BadRequestException('Impossible d’archiver un groupe système');
+    }
+
+    const updated = await this.prisma.group.update({
+      where: { id: groupId },
+      data: {
+        ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+        ...(body.description !== undefined
+          ? { description: body.description?.trim() || null }
+          : {}),
+        ...(body.archived === true ? { archivedAt: new Date() } : {}),
+        ...(body.archived === false ? { archivedAt: null } : {}),
+      },
+      include: {
+        permissions: { include: { permission: true } },
+        _count: { select: { memberships: true } },
+      },
+    });
+    return updated;
   }
 
   @Get('permissions')

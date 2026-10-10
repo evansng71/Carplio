@@ -127,6 +127,8 @@ export const PERMISSION_CATALOG: Array<{
   { key: perm('dashboard', 'analytics', 'list'), module: 'dashboard', resource: 'analytics', action: 'list', label: 'BI / budgets' },
   { key: perm('documents', 'document', 'list'), module: 'documents', resource: 'document', action: 'list', label: 'Lister documents' },
   { key: perm('documents', 'document', 'download'), module: 'documents', resource: 'document', action: 'download', label: 'Télécharger documents' },
+  { key: perm('documents', 'template', 'list'), module: 'documents', resource: 'template', action: 'list', label: 'Lister modèles documents' },
+  { key: perm('documents', 'template', 'manage'), module: 'documents', resource: 'template', action: 'manage', label: 'Gérer modèles documents' },
   { key: perm('portal', 'access', 'manage'), module: 'portal', resource: 'access', action: 'manage', label: 'Gérer accès portail' },
   { key: perm('portal', 'publication', 'publish'), module: 'portal', resource: 'publication', action: 'publish', label: 'Publier au portail' },
   { key: perm('messaging', 'thread', 'list'), module: 'messaging', resource: 'thread', action: 'list', label: 'Messagerie exploitation' },
