@@ -180,6 +180,20 @@ pnpm --filter @autocar/web build
 
 ---
 
+## Déploiement mono-app (carplio.evansng.fr)
+
+Si une seule app Node écoute sur `PORT` avec reverse-proxy interne :
+
+| Champ Infomaniak | Commande |
+|---|---|
+| **Build** | `npm run build:hosting` |
+| **Start** | `npm run start:hosting` |
+
+Sans l’étape Build, le start échoue avec `missing apps/web/.next`.  
+`start:hosting` tente un build de secours si les artefacts manquent (plus lent au 1er démarrage).
+
+---
+
 ## Pièges fréquents
 
 1. **Hébergement PHP seul** → Node ne tourne pas. Il faut l’offre Node/Cloud.

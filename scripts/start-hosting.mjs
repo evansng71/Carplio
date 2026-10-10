@@ -88,10 +88,14 @@ async function main() {
   const webDir = path.join(root, 'apps/web');
   const nextBuildId = path.join(webDir, '.next/BUILD_ID');
   if (!fs.existsSync(apiMain)) {
-    throw new Error('missing apps/api/dist/main.js — run Build first');
+    throw new Error(
+      'missing apps/api/dist/main.js — set Infomaniak Build to: npm run build:hosting',
+    );
   }
   if (!fs.existsSync(nextBuildId)) {
-    throw new Error('missing apps/web/.next — run Build first (next build)');
+    throw new Error(
+      'missing apps/web/.next — set Infomaniak Build to: npm run build:hosting',
+    );
   }
 
   run('api', [apiMain], {
