@@ -26,9 +26,9 @@ function resolveNextBin() {
   throw new Error('next binary not found — run build:hosting first');
 }
 
-function run(label, args, extraEnv = {}) {
+function run(label, args, extraEnv = {}, cwd = root) {
   const child = spawn(process.execPath, args, {
-    cwd: root,
+    cwd,
     env: { ...process.env, ...extraEnv },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -85,8 +85,13 @@ async function main() {
   console.log(`[hosting] public :${publicPort} | api :${apiPort} | web :${webPort}`);
 
   const apiMain = path.join(root, 'apps/api/dist/main.js');
+  const webDir = path.join(root, 'apps/web');
+  const nextBuildId = path.join(webDir, '.next/BUILD_ID');
   if (!fs.existsSync(apiMain)) {
-    throw new Error('missing apps/api/dist/main.js — rebuild');
+    throw new Error('missing apps/api/dist/main.js — run Build first');
+  }
+  if (!fs.existsSync(nextBuildId)) {
+    throw new Error('missing apps/web/.next — run Build first (next build)');
   }
 
   run('api', [apiMain], {
@@ -96,10 +101,16 @@ async function main() {
   });
 
   const nextBin = resolveNextBin();
-  run('web', [nextBin, 'start', '-p', String(webPort), '-H', '127.0.0.1'], {
-    PORT: String(webPort),
-    NEXT_PUBLIC_API_URL: '/api',
-  });
+  // cwd must be apps/web so Next finds .next there
+  run(
+    'web',
+    [nextBin, 'start', '-p', String(webPort), '-H', '127.0.0.1'],
+    {
+      PORT: String(webPort),
+      NEXT_PUBLIC_API_URL: '/api',
+    },
+    webDir,
+  );
 
   // Nest health: any response means listen OK (401 on /api/auth/me is fine)
   await waitHttp(`http://127.0.0.1:${apiPort}/api/auth/me`).catch(() =>
